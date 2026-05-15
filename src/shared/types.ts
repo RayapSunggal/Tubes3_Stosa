@@ -22,7 +22,6 @@ export interface DetectorOptions {
   enableAhoCorasick?: boolean;
   enableRabinKarp?: boolean;
   fuzzyThreshold: number;
-  caseSensitive?: boolean;
   normalizeText?: boolean;
 }
 
