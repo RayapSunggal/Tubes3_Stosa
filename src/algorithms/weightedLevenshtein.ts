@@ -12,6 +12,13 @@ const SIMILAR_CHARS=[
   "z2",
 ];
 
+interface TokenCandidate {
+  text: string;
+  lowerText: string;
+  start: number;
+  end: number;
+}
+
 function inGroup(char: string, group: string): boolean {
   for (let i=0; i<group.length; i++) {
     if (char===group[i]) return true;
@@ -64,59 +71,110 @@ function normalizeThreshold(threshold: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold: number): RawMatch[] {
+function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold: number, candidates: TokenCandidate[]): RawMatch[] {
   const matches: RawMatch[]=[];
-  const n=text.length;
   const m=pattern.length;
-  if (m===0 || n===0) return matches;
+  if (m===0 || candidates.length===0 || hasWhitespace(pattern)) return matches;
 
-  const data=text.toLowerCase();
   const target=pattern.toLowerCase();
   const limit=normalizeThreshold(threshold);
   const slack=Math.ceil(m*(1-limit));
   const minLen=Math.max(1, m-slack);
-  const maxLen=Math.min(n, m+slack);
+  const maxLen=m+slack;
+  const cache=new Map<string, { distance: number; similarity: number } | null>();
 
-  for (let i=0; i<n; i++) {
-    let bestDistance=Number.POSITIVE_INFINITY;
-    let bestSimilarity=0;
-    let bestEnd=-1;
-
-    for (let len=minLen; len<=maxLen && i+len<=n; len++) {
-      const end=i+len;
-      const candidate=data.slice(i, end);
-      const distance=weightedLevenshtein(candidate, target);
-      const similarity=1-distance/Math.max(len, m);
-
-      if (similarity>=limit && (similarity>bestSimilarity || (similarity===bestSimilarity && distance<bestDistance))) {
-        bestDistance=distance;
-        bestSimilarity=similarity;
-        bestEnd=end;
-      }
+  for (const candidate of candidates) {
+    const len=candidate.lowerText.length;
+    if (len<minLen || len>maxLen) {
+      continue;
     }
 
-    if (bestEnd!==-1) {
-      matches.push({
-        keyword,
-        matchedText: text.slice(i, bestEnd),
-        algorithm: "WeightedLevenshtein",
-        start: i,
-        end: bestEnd,
-        distance: bestDistance,
-        similarity: bestSimilarity,
-      });
+    if (!cache.has(candidate.lowerText)) {
+      cache.set(candidate.lowerText, scoreCandidate(candidate.lowerText, target, limit));
     }
+
+    const score=cache.get(candidate.lowerText);
+    if (score===null || score===undefined) {
+      continue;
+    }
+
+    matches.push({
+      keyword,
+      matchedText: text.slice(candidate.start, candidate.end),
+      algorithm: "WeightedLevenshtein",
+      start: candidate.start,
+      end: candidate.end,
+      distance: score.distance,
+      similarity: score.similarity,
+    });
   }
 
   return matches;
 }
 
+function scoreCandidate(source: string, target: string, limit: number): { distance: number; similarity: number } | null {
+  if (!hasSharedVisualGroup(source, target)) {
+    return null;
+  }
+
+  const distance=weightedLevenshtein(source, target);
+  const similarity=1-distance/Math.max(source.length, target.length);
+
+  if (similarity<limit) {
+    return null;
+  }
+
+  return { distance, similarity };
+}
+
+function hasWhitespace(value: string): boolean {
+  for (let i=0; i<value.length; i++) {
+    if (value[i].trim().length===0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasSharedVisualGroup(source: string, target: string): boolean {
+  for (const sourceChar of source) {
+    for (const targetChar of target) {
+      if (sourceChar===targetChar || substitutionCost(sourceChar, targetChar)<1) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function extractTokenCandidates(text: string): TokenCandidate[] {
+  const candidates: TokenCandidate[]=[];
+  const regex=/[\p{L}\p{N}_@!$]{2,}/giu;
+  let result: RegExpExecArray | null;
+
+  while ((result=regex.exec(text))!==null) {
+    const token=result[0];
+
+    candidates.push({
+      text: token,
+      lowerText: token.toLowerCase(),
+      start: result.index,
+      end: result.index+token.length,
+    });
+  }
+
+  return candidates;
+}
+
 export function runWeightedLevenshtein(input: DetectorInput): RawMatch[] {
   const { text, keywords, options }=input;
   const results: RawMatch[]=[];
+  const candidates=extractTokenCandidates(text);
 
   for (const keyword of keywords) {
-    results.push(...fuzzyMatcher(text, keyword, keyword, options.fuzzyThreshold));
+    results.push(...fuzzyMatcher(text, keyword, keyword, options.fuzzyThreshold, candidates));
   }
 
   return results;
