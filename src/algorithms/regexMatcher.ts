@@ -1,42 +1,60 @@
 import type { DetectorInput, RawMatch } from "../shared/types";
 
-function isRegexSpecial(char: string): boolean {
-  return char==="." || char==="*" || char==="+" || char==="?" || char==="^" || char==="$" || char==="{" || char==="}" || char==="(" || char===")" || char==="|" || char==="[" || char==="]" || char==="\\" || char==="/";
+interface RegexKeywordIndex {
+  byBaseWord: Map<string, string>;
 }
 
-function escapeRegex(pattern: string): string {
-  let result="";
+function buildRegexKeywordIndex(keywords: string[]): RegexKeywordIndex {
+  const byBaseWord=new Map<string, string>();
 
-  for (let i=0; i<pattern.length; i++) {
-    if (isRegexSpecial(pattern[i])) {
-      result+="\\";
-    }
-
-    result+=pattern[i];
-  }
-
-  return result;
-}
-
-function regexMatcher(text: string, pattern: string, keyword: string): RawMatch[] {
-  const matches: RawMatch[]=[];
-  if (pattern.length===0) return matches;
-
-  const regex=new RegExp(
-    `(^|[^\\p{L}\\p{N}_])(${escapeRegex(pattern)}\\d{2,3})(?![\\p{L}\\p{N}_])`,
-    "giu",
-  );
-
-  let result: RegExpExecArray | null;
-
-  while ((result=regex.exec(text))!==null) {
-    const matchedText=result[2];
-    const start=result.index+result[1].length;
-
-    if (matchedText.length===0) {
-      regex.lastIndex++;
+  for (const keyword of keywords) {
+    if (!isRegexBaseKeyword(keyword)) {
       continue;
     }
+
+    const normalized=keyword.toLowerCase();
+    if (!byBaseWord.has(normalized)) {
+      byBaseWord.set(normalized, keyword);
+    }
+  }
+
+  return { byBaseWord };
+}
+
+function isRegexBaseKeyword(keyword: string): boolean {
+  if (keyword.length===0) {
+    return false;
+  }
+
+  for (const char of keyword) {
+    if (!isLetter(char)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isLetter(char: string): boolean {
+  return char.toLowerCase()!==char.toUpperCase();
+}
+
+function regexMatcher(text: string, keywordIndex: RegexKeywordIndex): RawMatch[] {
+  const matches: RawMatch[]=[];
+  const pattern=/(^|[^\p{L}\p{N}_])([\p{L}]+)(\d{2,3})(?![\p{L}\p{N}_])/giu;
+  let result: RegExpExecArray | null;
+
+  while ((result=pattern.exec(text))!==null) {
+    const baseWord=result[2];
+    const normalizedBaseWord=baseWord.toLowerCase();
+    const keyword=keywordIndex.byBaseWord.get(normalizedBaseWord);
+
+    if (keyword===undefined) {
+      continue;
+    }
+
+    const start=result.index+result[1].length;
+    const matchedText=`${baseWord}${result[3]}`;
 
     matches.push({
       keyword,
@@ -52,12 +70,5 @@ function regexMatcher(text: string, pattern: string, keyword: string): RawMatch[
 }
 
 export function runRegexMatcher(input: DetectorInput): RawMatch[] {
-  const { text, keywords }=input;
-  const results: RawMatch[]=[];
-
-  for (const keyword of keywords) {
-    results.push(...regexMatcher(text, keyword, keyword));
-  }
-
-  return results;
+  return regexMatcher(input.text, buildRegexKeywordIndex(input.keywords));
 }

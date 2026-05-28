@@ -19,29 +19,54 @@ interface TokenCandidate {
   end: number;
 }
 
+interface KeywordProfile {
+  keyword: string;
+  target: string;
+  tokenCount: number;
+  threshold: number;
+}
+
+interface Score {
+  distance: number;
+  similarity: number;
+  comparisons: number;
+}
+
 function inGroup(char: string, group: string): boolean {
   for (let i=0; i<group.length; i++) {
-    if (char===group[i]) return true;
+    if (char===group[i]) {
+      return true;
+    }
   }
 
   return false;
 }
 
 function substitutionCost(a: string, b: string): number {
-  if (a===b) return 0;
+  if (a===b) {
+    return 0;
+  }
 
   for (const group of SIMILAR_CHARS) {
-    if (inGroup(a, group) && inGroup(b, group)) return 0.5;
+    if (inGroup(a, group) && inGroup(b, group)) {
+      return 0.5;
+    }
   }
 
   return 1;
 }
 
-function weightedLevenshtein(source: string, target: string): number {
+function weightedLevenshtein(source: string, target: string, maxDistance: number): { distance: number; comparisons: number } | null {
   const n=source.length;
   const m=target.length;
+
+  if (Math.abs(n-m)>maxDistance) {
+    return null;
+  }
+
   const prev=new Array<number>(m+1);
   const curr=new Array<number>(m+1);
+  let comparisons=0;
 
   for (let j=0; j<=m; j++) {
     prev[j]=j;
@@ -49,12 +74,24 @@ function weightedLevenshtein(source: string, target: string): number {
 
   for (let i=1; i<=n; i++) {
     curr[0]=i;
+    let rowMin=curr[0];
 
     for (let j=1; j<=m; j++) {
+      comparisons++;
+
       const del=prev[j]+1;
       const ins=curr[j-1]+1;
       const sub=prev[j-1]+substitutionCost(source[i-1], target[j-1]);
-      curr[j]=Math.min(del, ins, sub);
+      const best=Math.min(del, ins, sub);
+
+      curr[j]=best;
+      if (best<rowMin) {
+        rowMin=best;
+      }
+    }
+
+    if (rowMin>maxDistance) {
+      return null;
     }
 
     for (let j=0; j<=m; j++) {
@@ -62,7 +99,7 @@ function weightedLevenshtein(source: string, target: string): number {
     }
   }
 
-  return prev[m];
+  return prev[m]<=maxDistance ? { distance: prev[m], comparisons } : null;
 }
 
 function normalizeThreshold(threshold: number): number {
@@ -71,68 +108,82 @@ function normalizeThreshold(threshold: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold: number, tokens: TokenCandidate[]): RawMatch[] {
+function fuzzyMatcher(text: string, profile: KeywordProfile, candidates: TokenCandidate[], scoreCache: Map<string, Score | null>): RawMatch[] {
   const matches: RawMatch[]=[];
-  const target=normalizeComparableText(pattern);
-  const m=target.length;
-  if (m===0 || tokens.length===0) return matches;
-
-  const limit=normalizeThreshold(threshold);
-  const slack=Math.ceil(m*(1-limit));
-  const minLen=Math.max(1, m-slack);
-  const maxLen=m+slack;
-  const cache=new Map<string, { distance: number; similarity: number } | null>();
-  const candidates=createFuzzyCandidates(pattern, tokens, text);
+  if (profile.target.length===0 || candidates.length===0) {
+    return matches;
+  }
 
   for (const candidate of candidates) {
-    const len=candidate.lowerText.length;
-    if (len<minLen || len>maxLen) {
-      continue;
-    }
-
-    if (!cache.has(candidate.lowerText)) {
-      cache.set(candidate.lowerText, scoreCandidate(candidate.lowerText, target, limit));
-    }
-
-    const score=cache.get(candidate.lowerText);
-    if (score===null || score===undefined) {
+    const score=getCachedScore(profile, candidate, scoreCache);
+    if (score===null) {
       continue;
     }
 
     matches.push({
-      keyword,
+      keyword: profile.keyword,
       matchedText: text.slice(candidate.start, candidate.end),
       algorithm: "WeightedLevenshtein",
       start: candidate.start,
       end: candidate.end,
       distance: score.distance,
       similarity: score.similarity,
+      comparisons: score.comparisons,
     });
   }
 
   return matches;
 }
 
-function createFuzzyCandidates(
-  pattern: string,
-  tokens: TokenCandidate[],
-  text: string,
-): TokenCandidate[] {
-  const patternTokenCount=countTokens(pattern);
+function getCachedScore(profile: KeywordProfile, candidate: TokenCandidate, scoreCache: Map<string, Score | null>): Score | null {
+  const cacheKey=`${profile.target}\u0000${candidate.lowerText}`;
+  const cached=scoreCache.get(cacheKey);
+  if (cached!==undefined) {
+    return cached;
+  }
 
-  if (patternTokenCount<=1) {
+  const score=scoreCandidate(candidate.lowerText, profile.target, profile.threshold);
+  scoreCache.set(cacheKey, score);
+
+  return score;
+}
+
+function createKeywordProfiles(keywords: string[], threshold: number): KeywordProfile[] {
+  const profiles: KeywordProfile[]=[];
+  const normalizedThreshold=normalizeThreshold(threshold);
+
+  for (const keyword of keywords) {
+    const target=normalizeComparableText(keyword);
+    const tokenCount=countTokens(keyword);
+
+    if (target.length===0 || tokenCount===0) {
+      continue;
+    }
+
+    profiles.push({
+      keyword,
+      target,
+      tokenCount,
+      threshold: normalizedThreshold,
+    });
+  }
+
+  return profiles;
+}
+
+function createFuzzyCandidates(tokenCount: number, tokens: TokenCandidate[], text: string): TokenCandidate[] {
+  if (tokenCount<=1) {
     return tokens;
   }
 
   const candidates: TokenCandidate[]=[];
-  for (let i=0; i<=tokens.length-patternTokenCount; i++) {
+  for (let i=0; i<=tokens.length-tokenCount; i++) {
     const startToken=tokens[i];
-    const endToken=tokens[i+patternTokenCount-1];
-    const value=text.slice(startToken.start, endToken.end);
+    const endToken=tokens[i+tokenCount-1];
 
     candidates.push({
-      text: value,
-      lowerText: normalizeComparableText(value),
+      text: text.slice(startToken.start, endToken.end),
+      lowerText: joinTokenWindow(tokens, i, tokenCount),
       start: startToken.start,
       end: endToken.end,
     });
@@ -141,23 +192,76 @@ function createFuzzyCandidates(
   return candidates;
 }
 
-function normalizeComparableText(value: string): string {
-  return value.toLowerCase().replace(/\s+/gu, " ").trim();
+function joinTokenWindow(tokens: TokenCandidate[], startIndex: number, tokenCount: number): string {
+  let result="";
+
+  for (let offset=0; offset<tokenCount; offset++) {
+    if (offset>0) {
+      result+=" ";
+    }
+
+    result+=tokens[startIndex+offset].lowerText;
+  }
+
+  return result;
 }
 
-function scoreCandidate(source: string, target: string, limit: number): { distance: number; similarity: number } | null {
+function normalizeComparableText(value: string): string {
+  let result="";
+  let pendingSpace=false;
+
+  for (let i=0; i<value.length; i++) {
+    const char=value[i].toLowerCase();
+
+    if (isWhitespace(char)) {
+      pendingSpace=result.length>0;
+      continue;
+    }
+
+    if (pendingSpace) {
+      result+=" ";
+      pendingSpace=false;
+    }
+
+    result+=char;
+  }
+
+  return result;
+}
+
+function scoreCandidate(source: string, target: string, limit: number): Score | null {
+  const maxLength=Math.max(source.length, target.length);
+  if (maxLength===0) {
+    return null;
+  }
+
+  const maxDistance=(1-limit)*maxLength;
+  if (!canReachThresholdByLength(source.length, target.length, maxDistance)) {
+    return null;
+  }
+
   if (!hasSharedVisualGroup(source, target)) {
     return null;
   }
 
-  const distance=weightedLevenshtein(source, target);
-  const similarity=1-distance/Math.max(source.length, target.length);
-
-  if (similarity<limit) {
+  const result=weightedLevenshtein(source, target, maxDistance);
+  if (result===null) {
     return null;
   }
 
-  return { distance, similarity };
+  const similarity=1-result.distance/maxLength;
+
+  return similarity>=limit
+    ? {
+        distance: result.distance,
+        similarity,
+        comparisons: result.comparisons,
+      }
+    : null;
+}
+
+function canReachThresholdByLength(sourceLength: number, targetLength: number, maxDistance: number): boolean {
+  return Math.abs(sourceLength-targetLength)<=maxDistance;
 }
 
 function hasSharedVisualGroup(source: string, target: string): boolean {
@@ -173,11 +277,19 @@ function hasSharedVisualGroup(source: string, target: string): boolean {
 }
 
 function countTokens(value: string): number {
-  const regex=/[\p{L}\p{N}_@!$]+/giu;
   let count=0;
+  let inToken=false;
 
-  while (regex.exec(value)!==null) {
-    count++;
+  for (let i=0; i<value.length; i++) {
+    if (isTokenCharacter(value[i])) {
+      if (!inToken) {
+        count++;
+        inToken=true;
+      }
+      continue;
+    }
+
+    inToken=false;
   }
 
   return count;
@@ -185,30 +297,81 @@ function countTokens(value: string): number {
 
 function extractTokenCandidates(text: string): TokenCandidate[] {
   const candidates: TokenCandidate[]=[];
-  const regex=/[\p{L}\p{N}_@!$]{2,}/giu;
-  let result: RegExpExecArray | null;
+  let tokenStart=-1;
+  let tokenText="";
 
-  while ((result=regex.exec(text))!==null) {
-    const token=result[0];
+  for (let i=0; i<text.length; i++) {
+    const char=text[i];
 
-    candidates.push({
-      text: token,
-      lowerText: token.toLowerCase(),
-      start: result.index,
-      end: result.index+token.length,
-    });
+    if (isTokenCharacter(char)) {
+      if (tokenStart<0) {
+        tokenStart=i;
+        tokenText="";
+      }
+
+      tokenText+=char;
+      continue;
+    }
+
+    if (tokenStart>=0) {
+      addTokenCandidate(candidates, tokenText, tokenStart, i);
+      tokenStart=-1;
+      tokenText="";
+    }
+  }
+
+  if (tokenStart>=0) {
+    addTokenCandidate(candidates, tokenText, tokenStart, text.length);
   }
 
   return candidates;
 }
 
+function addTokenCandidate(candidates: TokenCandidate[], tokenText: string, start: number, end: number): void {
+  if (tokenText.length<2) {
+    return;
+  }
+
+  candidates.push({
+    text: tokenText,
+    lowerText: tokenText.toLowerCase(),
+    start,
+    end,
+  });
+}
+
+function isTokenCharacter(char: string): boolean {
+  return isLetter(char) || isDigit(char) || char==="_" || char==="@" || char==="!" || char==="$";
+}
+
+function isLetter(char: string): boolean {
+  return char.toLowerCase()!==char.toUpperCase();
+}
+
+function isDigit(char: string): boolean {
+  return char>="0" && char<="9";
+}
+
+function isWhitespace(char: string): boolean {
+  return char===" " || char==="\n" || char==="\r" || char==="\t" || char==="\f" || char==="\v";
+}
+
 export function runWeightedLevenshtein(input: DetectorInput): RawMatch[] {
   const { text, keywords, options }=input;
   const results: RawMatch[]=[];
-  const candidates=extractTokenCandidates(text);
+  const tokens=extractTokenCandidates(text);
+  const profiles=createKeywordProfiles(keywords, options.fuzzyThreshold);
+  const candidateCache=new Map<number, TokenCandidate[]>();
+  const scoreCache=new Map<string, Score | null>();
 
-  for (const keyword of keywords) {
-    results.push(...fuzzyMatcher(text, keyword, keyword, options.fuzzyThreshold, candidates));
+  for (const profile of profiles) {
+    let candidates=candidateCache.get(profile.tokenCount);
+    if (candidates===undefined) {
+      candidates=createFuzzyCandidates(profile.tokenCount, tokens, text);
+      candidateCache.set(profile.tokenCount, candidates);
+    }
+
+    results.push(...fuzzyMatcher(text, profile, candidates, scoreCache));
   }
 
   return results;
