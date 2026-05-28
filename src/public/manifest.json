@@ -5,6 +5,10 @@
   "description": "A Chrome extension built with React, TypeScript, and Vite.",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
     "default_popup": "popup.html"
   },
@@ -17,7 +21,11 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["keyword.txt"],
+      "resources": [
+        "keyword.txt",
+        "tesseract/*",
+        "tessdata/4.0.0_best_int/*"
+      ],
       "matches": ["<all_urls>"]
     }
   ]

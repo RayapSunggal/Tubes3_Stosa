@@ -1,16 +1,20 @@
 import { clearHighlights, highlightDetectorMatches } from "../content/highlighter";
 import { applyBlurToHighlights, clearBlurState } from "../content/blur";
 import { scanDocumentText } from "../content/domScanner";
+import { clearOcrState, scanImagesWithOcr } from "../content/ocrScanner";
 import { setupJudolTooltip } from "../content/tooltip";
 import { runFullDetector } from "../detector/fullDetector";
 import {
   BLUR_SETTING_STORAGE_KEY,
   DEFAULT_BLUR_ENABLED,
+  DEFAULT_OCR_ENABLED,
   GET_LATEST_SCAN_MESSAGE,
   LATEST_SCAN_STORAGE_KEY,
+  OCR_SETTING_STORAGE_KEY,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
+  type OcrStats,
 } from "../shared/messaging";
 import type { DetectorInput, DetectorOutput } from "../shared/types";
 
@@ -29,16 +33,21 @@ let keywordsPromise: Promise<string[]> | null = null;
 let observer: MutationObserver | null = null;
 let scanTimeoutId: number | undefined;
 let blurEnabled = DEFAULT_BLUR_ENABLED;
+let ocrEnabled = DEFAULT_OCR_ENABLED;
 let latestScanSnapshot: LatestScanSnapshot | null = null;
 
 void bootstrapContentScript();
 
 async function bootstrapContentScript(): Promise<void> {
   await waitForBody();
-  blurEnabled = await loadBlurSetting();
-  watchBlurSetting();
+  [blurEnabled, ocrEnabled] = await Promise.all([
+    loadBooleanSetting(BLUR_SETTING_STORAGE_KEY, DEFAULT_BLUR_ENABLED),
+    loadBooleanSetting(OCR_SETTING_STORAGE_KEY, DEFAULT_OCR_ENABLED),
+  ]);
+  watchStoredSettings();
   setupRuntimeMessaging();
   setupJudolTooltip();
+  window.addEventListener("load", () => scheduleScan(500), { once: true });
   startObserver();
   scheduleScan(50);
 }
@@ -82,16 +91,13 @@ async function scanAndHighlight(): Promise<void> {
 
   try {
     clearBlurState();
+    clearOcrState();
     clearHighlights();
 
     const [keywords, scan] = await Promise.all([
       loadKeywords(),
       Promise.resolve(scanDocumentText(document.body)),
     ]);
-
-    if (scan.text.trim().length === 0) {
-      return;
-    }
 
     const input: DetectorInput = {
       text: scan.text,
@@ -101,12 +107,17 @@ async function scanAndHighlight(): Promise<void> {
 
     const detectorOutput = runFullDetector(input);
     const highlightedCount = highlightDetectorMatches(scan, detectorOutput);
+    const ocrOutput = ocrEnabled
+      ? await scanImagesWithOcr(document.body, keywords, DEFAULT_OPTIONS)
+      : { stats: createEmptyOcrStats() };
+
     applyBlurToHighlights(blurEnabled);
-    storeLatestScan(detectorOutput);
+    storeLatestScan(detectorOutput, ocrOutput.stats);
 
     console.info("[Judol Detector] scan complete", {
       detectorMatches: detectorOutput.matches.length,
       highlightedCount,
+      ocrMatches: ocrOutput.stats.matchCount,
     });
   } catch (error) {
     console.error("[Judol Detector] scan failed", error);
@@ -115,20 +126,20 @@ async function scanAndHighlight(): Promise<void> {
   }
 }
 
-function loadBlurSetting(): Promise<boolean> {
+function loadBooleanSetting(key: string, fallback: boolean): Promise<boolean> {
   if (!chrome.storage?.local) {
-    return Promise.resolve(DEFAULT_BLUR_ENABLED);
+    return Promise.resolve(fallback);
   }
 
   return new Promise((resolve) => {
-    chrome.storage.local.get(BLUR_SETTING_STORAGE_KEY, (result) => {
-      const value = result[BLUR_SETTING_STORAGE_KEY];
-      resolve(typeof value === "boolean" ? value : DEFAULT_BLUR_ENABLED);
+    chrome.storage.local.get(key, (result) => {
+      const value = result[key];
+      resolve(typeof value === "boolean" ? value : fallback);
     });
   });
 }
 
-function watchBlurSetting(): void {
+function watchStoredSettings(): void {
   if (!chrome.storage?.onChanged) {
     return;
   }
@@ -140,11 +151,23 @@ function watchBlurSetting(): void {
 
     const change = changes[BLUR_SETTING_STORAGE_KEY];
     if (!change || typeof change.newValue !== "boolean") {
+      const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
+      if (ocrChange && typeof ocrChange.newValue === "boolean") {
+        ocrEnabled = ocrChange.newValue;
+        scheduleScan(100);
+      }
+
       return;
     }
 
     blurEnabled = change.newValue;
     applyBlurToHighlights(blurEnabled);
+
+    const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
+    if (ocrChange && typeof ocrChange.newValue === "boolean") {
+      ocrEnabled = ocrChange.newValue;
+      scheduleScan(100);
+    }
   });
 }
 
@@ -161,12 +184,13 @@ function setupRuntimeMessaging(): void {
   );
 }
 
-function storeLatestScan(output: DetectorOutput): void {
+function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
   const snapshot: LatestScanSnapshot = {
     url: window.location.href,
     title: document.title,
     scannedAt: Date.now(),
     stats: output.stats,
+    ocrStats,
   };
 
   latestScanSnapshot = snapshot;
@@ -186,6 +210,18 @@ function storeLatestScan(output: DetectorOutput): void {
       void chrome.runtime.lastError;
     },
   );
+}
+
+function createEmptyOcrStats(): OcrStats {
+  return {
+    candidateImageCount: 0,
+    analyzedImageCount: 0,
+    matchedImageCount: 0,
+    matchCount: 0,
+    keywordCounts: {},
+    executionTimeMs: 0,
+    errorCount: 0,
+  };
 }
 
 function loadKeywords(): Promise<string[]> {

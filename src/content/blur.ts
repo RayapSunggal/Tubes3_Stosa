@@ -1,11 +1,11 @@
 const BLUR_CLASS = "judol-detector-highlight--blurred";
+const BLUR_TARGET_SELECTOR =
+  "[data-judol-highlight='true'], [data-judol-ocr-match='true']";
 
 export function applyBlurToHighlights(enabled: boolean, root: ParentNode = document): void {
   injectBlurStyle();
 
-  const highlights = Array.from(
-    root.querySelectorAll<HTMLElement>("[data-judol-highlight='true']"),
-  );
+  const highlights = Array.from(root.querySelectorAll<HTMLElement>(BLUR_TARGET_SELECTOR));
 
   for (const highlight of highlights) {
     highlight.classList.toggle(BLUR_CLASS, enabled);

@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BLUR_SETTING_STORAGE_KEY,
   DEFAULT_BLUR_ENABLED,
+  DEFAULT_OCR_ENABLED,
   GET_LATEST_SCAN_MESSAGE,
+  OCR_SETTING_STORAGE_KEY,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
@@ -69,7 +71,7 @@ const algorithmTones: Record<
 
 export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
-  const [ocrEnabled, setOcrEnabled] = useState(true);
+  const [ocrEnabled, setOcrEnabled] = useState(DEFAULT_OCR_ENABLED);
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
   const [currentPageLabel, setCurrentPageLabel] = useState("Halaman aktif");
   const activeStats = useMemo(
@@ -87,12 +89,21 @@ export function Popup() {
       return;
     }
 
-    chrome.storage.local.get(BLUR_SETTING_STORAGE_KEY, (result) => {
-      const value = result[BLUR_SETTING_STORAGE_KEY];
-      if (typeof value === "boolean") {
-        setBlurEnabled(value);
-      }
-    });
+    chrome.storage.local.get(
+      [BLUR_SETTING_STORAGE_KEY, OCR_SETTING_STORAGE_KEY],
+      (result) => {
+        const blurValue = result[BLUR_SETTING_STORAGE_KEY];
+        const ocrValue = result[OCR_SETTING_STORAGE_KEY];
+
+        if (typeof blurValue === "boolean") {
+          setBlurEnabled(blurValue);
+        }
+
+        if (typeof ocrValue === "boolean") {
+          setOcrEnabled(ocrValue);
+        }
+      },
+    );
 
     const handleStorageChange = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -105,6 +116,11 @@ export function Popup() {
       const blurChange = changes[BLUR_SETTING_STORAGE_KEY];
       if (typeof blurChange?.newValue === "boolean") {
         setBlurEnabled(blurChange.newValue);
+      }
+
+      const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
+      if (typeof ocrChange?.newValue === "boolean") {
+        setOcrEnabled(ocrChange.newValue);
       }
     };
 
@@ -204,6 +220,18 @@ export function Popup() {
     });
   }
 
+  function handleOcrToggle(enabled: boolean): void {
+    setOcrEnabled(enabled);
+
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      return;
+    }
+
+    void chrome.storage.local.set({
+      [OCR_SETTING_STORAGE_KEY]: enabled,
+    });
+  }
+
   return (
     <main className="popup">
       <header className="popup-header">
@@ -283,7 +311,7 @@ export function Popup() {
             <input
               type="checkbox"
               checked={ocrEnabled}
-              onChange={(event) => setOcrEnabled(event.currentTarget.checked)}
+              onChange={(event) => handleOcrToggle(event.currentTarget.checked)}
             />
           </label>
         </div>
@@ -303,32 +331,41 @@ function trimLabel(label: string): string {
 
 function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
   const stats = snapshot.stats;
-  const keywordEntries = Object.entries(stats.keywordCounts)
+  const ocrStats = snapshot.ocrStats;
+  const keywordCounts = mergeKeywordCounts(
+    stats.keywordCounts,
+    ocrStats?.keywordCounts ?? {},
+  );
+  const keywordEntries = Object.entries(keywordCounts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 5);
   const totalExecutionTime = stats.algorithmStats.reduce(
     (total, item) => total + item.executionTimeMs,
     0,
-  );
+  ) + (ocrStats?.executionTimeMs ?? 0);
+  const ocrMatchCount = ocrStats?.matchCount ?? 0;
 
   return {
-    scannedNodes: stats.totalRawMatches,
-    detailLabel: "raw match",
-    totalKeywords: Object.keys(stats.keywordCounts).length,
-    totalMatches: stats.totalMergedMatches,
+    scannedNodes: stats.totalRawMatches + (ocrStats?.candidateImageCount ?? 0),
+    detailLabel: ocrStats ? "raw match + gambar" : "raw match",
+    totalKeywords: Object.keys(keywordCounts).length,
+    totalMatches: stats.totalMergedMatches + ocrMatchCount,
     executionTimeMs: totalExecutionTime,
     matchKinds: [
       { label: "Exact", value: stats.matchKindCounts.exact },
       { label: "RegEx", value: stats.matchKindCounts.regex },
       { label: "Fuzzy", value: stats.matchKindCounts.fuzzy },
-      { label: "OCR", value: 0 },
+      { label: "OCR", value: ocrMatchCount },
     ],
     keywords:
       keywordEntries.length > 0
         ? keywordEntries.map(([keyword, count]) => ({
             keyword,
             count,
-            kind: "Detected" as const,
+            kind:
+              stats.keywordCounts[keyword] === undefined
+                ? ("OCR" as const)
+                : ("Detected" as const),
           }))
         : [{ keyword: "Belum ada", count: 0, kind: "Detected" as const }],
     algorithms: stats.algorithmStats.map((item) => ({
@@ -339,6 +376,19 @@ function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
       tone: algorithmTones[item.algorithm],
     })),
   };
+}
+
+function mergeKeywordCounts(
+  primary: Record<string, number>,
+  secondary: Record<string, number>,
+): Record<string, number> {
+  const merged = { ...primary };
+
+  for (const [keyword, count] of Object.entries(secondary)) {
+    merged[keyword] = (merged[keyword] ?? 0) + count;
+  }
+
+  return merged;
 }
 
 function formatAlgorithmName(algorithm: AlgorithmName): string {

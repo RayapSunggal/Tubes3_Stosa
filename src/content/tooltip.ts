@@ -78,7 +78,9 @@ function findHighlightTarget(target: EventTarget | null): Element | null {
     return null;
   }
 
-  return target.closest("[data-judol-highlight='true']");
+  return target.closest(
+    "[data-judol-highlight='true'], [data-judol-ocr-match='true']",
+  );
 }
 
 function showTooltip(target: Element, x: number, y: number): void {
