@@ -2,12 +2,11 @@ import { clearHighlights, highlightDetectorMatches } from "../content/highlighte
 import { scanDocumentText } from "../content/domScanner";
 import { setupJudolTooltip } from "../content/tooltip";
 import { runFullDetector } from "../detector/fullDetector";
-import type {
-  DetectorInput,
-  DetectorOutput,
-  MergedMatch,
-  RawMatch,
-} from "../shared/types";
+import {
+  LATEST_SCAN_STORAGE_KEY,
+  type LatestScanSnapshot,
+} from "../shared/messaging";
+import type { DetectorInput, DetectorOutput } from "../shared/types";
 
 const DEFAULT_OPTIONS = {
   enableKMP: true,
@@ -89,20 +88,35 @@ async function scanAndHighlight(): Promise<void> {
     };
 
     const detectorOutput = runFullDetector(input);
-    const output =
-      detectorOutput.matches.length > 0 ? detectorOutput : buildPreviewOutput(input);
-    const highlightedCount = highlightDetectorMatches(scan, output);
+    const highlightedCount = highlightDetectorMatches(scan, detectorOutput);
+    storeLatestScan(detectorOutput);
 
     console.info("[Judol Detector] scan complete", {
       detectorMatches: detectorOutput.matches.length,
       highlightedCount,
-      previewMode: detectorOutput.matches.length === 0,
     });
   } catch (error) {
     console.error("[Judol Detector] scan failed", error);
   } finally {
     startObserver();
   }
+}
+
+function storeLatestScan(output: DetectorOutput): void {
+  if (!chrome.storage?.local) {
+    return;
+  }
+
+  const snapshot: LatestScanSnapshot = {
+    url: window.location.href,
+    title: document.title,
+    scannedAt: Date.now(),
+    stats: output.stats,
+  };
+
+  void chrome.storage.local.set({
+    [LATEST_SCAN_STORAGE_KEY]: snapshot,
+  });
 }
 
 function loadKeywords(): Promise<string[]> {
@@ -121,114 +135,4 @@ function loadKeywords(): Promise<string[]> {
     );
 
   return keywordsPromise;
-}
-
-// Temporary bridge so the highlighter can be tested before fullDetector is implemented.
-function buildPreviewOutput(input: DetectorInput): DetectorOutput {
-  const startedAt = performance.now();
-  const rawMatches: RawMatch[] = [];
-
-  collectKeywordPreviewMatches(input, rawMatches);
-  collectNumberSuffixPreviewMatches(input.text, rawMatches);
-
-  const matches = rawMatches
-    .sort((left, right) => left.start - right.start || right.end - left.end)
-    .reduce<MergedMatch[]>((accepted, item) => {
-      const previous = accepted[accepted.length - 1];
-      if (previous && item.start < previous.end) {
-        return accepted;
-      }
-
-      accepted.push({
-        matchedText: item.matchedText,
-        start: item.start,
-        end: item.end,
-        contributions: [
-          {
-            algorithm: item.algorithm,
-            keyword: item.keyword,
-            matchedText: item.matchedText,
-          },
-        ],
-        keywords: [item.keyword],
-        algorithms: [item.algorithm],
-        matchKinds: [item.isPatternMatch ? "regex" : "exact"],
-      });
-      return accepted;
-    }, []);
-
-  const keywordCounts = matches.reduce<Record<string, number>>((counts, match) => {
-    for (const keyword of match.keywords) {
-      counts[keyword] = (counts[keyword] ?? 0) + 1;
-    }
-
-    return counts;
-  }, {});
-
-  return {
-    rawMatches,
-    matches,
-    stats: {
-      totalRawMatches: rawMatches.length,
-      totalMergedMatches: matches.length,
-      keywordCounts,
-      algorithmStats: [
-        {
-          algorithm: "RegEx",
-          matchCount: matches.length,
-          executionTimeMs: performance.now() - startedAt,
-          comparisons: 0,
-        },
-      ],
-    },
-  };
-}
-
-function collectKeywordPreviewMatches(input: DetectorInput, rawMatches: RawMatch[]): void {
-  const keywords = [...input.keywords].sort((left, right) => right.length - left.length);
-
-  for (const keyword of keywords) {
-    const pattern = new RegExp(
-      `(^|[^\\p{L}\\p{N}_])(${escapeRegExp(keyword)})(?=$|[^\\p{L}\\p{N}_])`,
-      "giu",
-    );
-
-    for (const match of input.text.matchAll(pattern)) {
-      const prefix = match[1] ?? "";
-      const matchedText = match[2] ?? "";
-      const start = (match.index ?? 0) + prefix.length;
-
-      rawMatches.push({
-        keyword,
-        matchedText,
-        algorithm: "RegEx",
-        start,
-        end: start + matchedText.length,
-      });
-    }
-  }
-}
-
-function collectNumberSuffixPreviewMatches(text: string, rawMatches: RawMatch[]): void {
-  const pattern =
-    /(^|[^\p{L}\p{N}_])([\p{L}][\p{L}\p{M}0-9]{2,}\d{2,3})(?=$|[^\p{L}\p{N}_])/giu;
-
-  for (const match of text.matchAll(pattern)) {
-    const prefix = match[1] ?? "";
-    const matchedText = match[2] ?? "";
-    const start = (match.index ?? 0) + prefix.length;
-
-    rawMatches.push({
-      keyword: matchedText,
-      matchedText,
-      algorithm: "RegEx",
-      start,
-      end: start + matchedText.length,
-      isPatternMatch: true,
-    });
-  }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }

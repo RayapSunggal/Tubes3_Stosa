@@ -1,7 +1,7 @@
 interface KeywordDatum {
   keyword: string;
   count: number;
-  kind: "Exact" | "RegEx" | "Fuzzy" | "OCR";
+  kind: "Exact" | "RegEx" | "Fuzzy" | "OCR" | "Detected";
 }
 
 interface ChartPanelProps {

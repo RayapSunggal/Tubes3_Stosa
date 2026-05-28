@@ -1,9 +1,36 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  LATEST_SCAN_STORAGE_KEY,
+  type LatestScanSnapshot,
+} from "../../shared/messaging";
+import type { AlgorithmName } from "../../shared/types";
 import { ChartPanel } from "./ChartPanel";
 import { StatsPanel } from "./StatsPanel";
 
-const popupStats = {
+interface PopupStatsView {
+  scannedNodes: number;
+  detailLabel: string;
+  totalKeywords: number;
+  totalMatches: number;
+  executionTimeMs: number;
+  matchKinds: Array<{ label: string; value: number }>;
+  keywords: Array<{
+    keyword: string;
+    count: number;
+    kind: "Exact" | "RegEx" | "Fuzzy" | "OCR" | "Detected";
+  }>;
+  algorithms: Array<{
+    name: string;
+    matches: number;
+    timeMs: number;
+    comparisons: number;
+    tone: "green" | "blue" | "red" | "amber" | "violet" | "cyan";
+  }>;
+}
+
+const popupStats: PopupStatsView = {
   scannedNodes: 187,
+  detailLabel: "node DOM",
   totalKeywords: 42,
   totalMatches: 58,
   executionTimeMs: 37.84,
@@ -36,14 +63,61 @@ const popupStats = {
   ],
 };
 
+const algorithmTones: Record<
+  AlgorithmName,
+  "green" | "blue" | "red" | "amber" | "violet" | "cyan"
+> = {
+  KMP: "green",
+  BoyerMoore: "blue",
+  RegEx: "red",
+  WeightedLevenshtein: "amber",
+  AhoCorasick: "violet",
+  RabinKarp: "cyan",
+};
+
 export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(true);
   const [ocrEnabled, setOcrEnabled] = useState(true);
+  const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
+  const activeStats = useMemo(
+    () => (latestScan ? createStatsView(latestScan) : popupStats),
+    [latestScan],
+  );
 
   const kindTotal = useMemo(
-    () => popupStats.matchKinds.reduce((total, item) => total + item.value, 0),
-    [],
+    () => activeStats.matchKinds.reduce((total, item) => total + item.value, 0),
+    [activeStats.matchKinds],
   );
+
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      return;
+    }
+
+    chrome.storage.local.get(LATEST_SCAN_STORAGE_KEY, (result) => {
+      const snapshot = result[LATEST_SCAN_STORAGE_KEY] as LatestScanSnapshot | undefined;
+      if (snapshot) {
+        setLatestScan(snapshot);
+      }
+    });
+
+    const handleStorageChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName !== "local") {
+        return;
+      }
+
+      const change = changes[LATEST_SCAN_STORAGE_KEY];
+      if (change?.newValue) {
+        setLatestScan(change.newValue as LatestScanSnapshot);
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
 
   return (
     <main className="popup">
@@ -61,13 +135,15 @@ export function Popup() {
       <section className="summary-grid" aria-label="Ringkasan deteksi">
         <article className="summary-tile">
           <span className="tile-label">Keyword ditemukan</span>
-          <strong>{popupStats.totalKeywords}</strong>
-          <small>{popupStats.totalMatches} total match</small>
+          <strong>{activeStats.totalKeywords}</strong>
+          <small>{activeStats.totalMatches} total match</small>
         </article>
         <article className="summary-tile">
           <span className="tile-label">Waktu eksekusi</span>
-          <strong>{popupStats.executionTimeMs.toFixed(2)} ms</strong>
-          <small>{popupStats.scannedNodes} node DOM</small>
+          <strong>{activeStats.executionTimeMs.toFixed(2)} ms</strong>
+          <small>
+            {activeStats.scannedNodes} {activeStats.detailLabel}
+          </small>
         </article>
       </section>
 
@@ -81,7 +157,7 @@ export function Popup() {
         </div>
 
         <div className="kind-grid">
-          {popupStats.matchKinds.map((item) => (
+          {activeStats.matchKinds.map((item) => (
             <article className="kind-tile" key={item.label}>
               <span>{item.label}</span>
               <strong>{item.value}</strong>
@@ -90,8 +166,8 @@ export function Popup() {
         </div>
       </section>
 
-      <StatsPanel algorithms={popupStats.algorithms} />
-      <ChartPanel keywords={popupStats.keywords} />
+      <StatsPanel algorithms={activeStats.algorithms} />
+      <ChartPanel keywords={activeStats.keywords} />
 
       <section className="section bonus-section" aria-labelledby="bonus-title">
         <div className="section-heading">
@@ -130,8 +206,63 @@ export function Popup() {
 
       <footer className="popup-footer">
         <span>Threshold fuzzy: 0.82</span>
-        <span>Custom tooltip DOM siap</span>
+        <span>{latestScan ? "Statistik halaman aktif" : "Menunggu scan halaman"}</span>
       </footer>
     </main>
   );
+}
+
+function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
+  const stats = snapshot.stats;
+  const keywordEntries = Object.entries(stats.keywordCounts)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 5);
+  const totalExecutionTime = stats.algorithmStats.reduce(
+    (total, item) => total + item.executionTimeMs,
+    0,
+  );
+
+  return {
+    scannedNodes: stats.totalRawMatches,
+    detailLabel: "raw match",
+    totalKeywords: Object.keys(stats.keywordCounts).length,
+    totalMatches: stats.totalMergedMatches,
+    executionTimeMs: totalExecutionTime,
+    matchKinds: [
+      { label: "Exact", value: stats.matchKindCounts.exact },
+      { label: "RegEx", value: stats.matchKindCounts.regex },
+      { label: "Fuzzy", value: stats.matchKindCounts.fuzzy },
+      { label: "OCR", value: 0 },
+    ],
+    keywords:
+      keywordEntries.length > 0
+        ? keywordEntries.map(([keyword, count]) => ({
+            keyword,
+            count,
+            kind: "Detected" as const,
+          }))
+        : [{ keyword: "Belum ada", count: 0, kind: "Detected" as const }],
+    algorithms: stats.algorithmStats.map((item) => ({
+      name: formatAlgorithmName(item.algorithm),
+      matches: item.matchCount,
+      timeMs: item.executionTimeMs,
+      comparisons: item.comparisons,
+      tone: algorithmTones[item.algorithm],
+    })),
+  };
+}
+
+function formatAlgorithmName(algorithm: AlgorithmName): string {
+  switch (algorithm) {
+    case "BoyerMoore":
+      return "Boyer Moore";
+    case "WeightedLevenshtein":
+      return "Weighted Levenshtein";
+    case "AhoCorasick":
+      return "Aho-Corasick";
+    case "RabinKarp":
+      return "Rabin-Karp";
+    default:
+      return algorithm;
+  }
 }

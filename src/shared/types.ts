@@ -67,6 +67,7 @@ export interface DetectorStats {
   totalRawMatches: number;
   totalMergedMatches: number;
   keywordCounts: Record<string, number>;
+  matchKindCounts: Record<MatchKind, number>;
   algorithmStats: AlgorithmExecutionStats[];
 }
 
