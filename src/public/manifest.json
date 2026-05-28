@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tubes3 Stosa",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A Chrome extension built with React, TypeScript, and Vite.",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
@@ -13,6 +13,12 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["keyword.txt"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
