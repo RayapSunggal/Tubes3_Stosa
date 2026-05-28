@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BLUR_SETTING_STORAGE_KEY,
   DEFAULT_BLUR_ENABLED,
-  LATEST_SCAN_STORAGE_KEY,
+  GET_LATEST_SCAN_MESSAGE,
+  SCAN_UPDATED_MESSAGE,
+  type JudolRuntimeMessage,
   type LatestScanSnapshot,
 } from "../../shared/messaging";
 import type { AlgorithmName } from "../../shared/types";
@@ -30,38 +32,26 @@ interface PopupStatsView {
   }>;
 }
 
-const popupStats: PopupStatsView = {
-  scannedNodes: 187,
-  detailLabel: "node DOM",
-  totalKeywords: 42,
-  totalMatches: 58,
-  executionTimeMs: 37.84,
+const emptyStats: PopupStatsView = {
+  scannedNodes: 0,
+  detailLabel: "raw match",
+  totalKeywords: 0,
+  totalMatches: 0,
+  executionTimeMs: 0,
   matchKinds: [
-    { label: "Exact", value: 21 },
-    { label: "RegEx", value: 17 },
-    { label: "Fuzzy", value: 14 },
-    { label: "OCR", value: 6 },
+    { label: "Exact", value: 0 },
+    { label: "RegEx", value: 0 },
+    { label: "Fuzzy", value: 0 },
+    { label: "OCR", value: 0 },
   ],
-  keywords: [
-    { keyword: "GACOR99", count: 12, kind: "RegEx" as const },
-    { keyword: "MAXWIN", count: 10, kind: "Exact" as const },
-    { keyword: "H0KI88", count: 8, kind: "Fuzzy" as const },
-    { keyword: "SLOT99", count: 7, kind: "RegEx" as const },
-    { keyword: "MADU308", count: 5, kind: "OCR" as const },
-  ],
+  keywords: [{ keyword: "Belum ada", count: 0, kind: "Detected" as const }],
   algorithms: [
-    { name: "KMP", matches: 13, timeMs: 4.22, comparisons: 1140, tone: "green" as const },
-    { name: "Boyer Moore", matches: 8, timeMs: 3.76, comparisons: 930, tone: "blue" as const },
-    { name: "RegEx", matches: 17, timeMs: 1.18, comparisons: 0, tone: "red" as const },
-    {
-      name: "Weighted Levenshtein",
-      matches: 14,
-      timeMs: 18.34,
-      comparisons: 2680,
-      tone: "amber" as const,
-    },
-    { name: "Aho-Corasick", matches: 5, timeMs: 2.57, comparisons: 720, tone: "violet" as const },
-    { name: "Rabin-Karp", matches: 1, timeMs: 7.77, comparisons: 510, tone: "cyan" as const },
+    { name: "KMP", matches: 0, timeMs: 0, comparisons: 0, tone: "green" as const },
+    { name: "Boyer Moore", matches: 0, timeMs: 0, comparisons: 0, tone: "blue" as const },
+    { name: "RegEx", matches: 0, timeMs: 0, comparisons: 0, tone: "red" as const },
+    { name: "Weighted Levenshtein", matches: 0, timeMs: 0, comparisons: 0, tone: "amber" as const },
+    { name: "Aho-Corasick", matches: 0, timeMs: 0, comparisons: 0, tone: "violet" as const },
+    { name: "Rabin-Karp", matches: 0, timeMs: 0, comparisons: 0, tone: "cyan" as const },
   ],
 };
 
@@ -81,8 +71,9 @@ export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
   const [ocrEnabled, setOcrEnabled] = useState(true);
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
+  const [currentPageLabel, setCurrentPageLabel] = useState("Halaman aktif");
   const activeStats = useMemo(
-    () => (latestScan ? createStatsView(latestScan) : popupStats),
+    () => (latestScan ? createStatsView(latestScan) : emptyStats),
     [latestScan],
   );
 
@@ -95,13 +86,6 @@ export function Popup() {
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
       return;
     }
-
-    chrome.storage.local.get(LATEST_SCAN_STORAGE_KEY, (result) => {
-      const snapshot = result[LATEST_SCAN_STORAGE_KEY] as LatestScanSnapshot | undefined;
-      if (snapshot) {
-        setLatestScan(snapshot);
-      }
-    });
 
     chrome.storage.local.get(BLUR_SETTING_STORAGE_KEY, (result) => {
       const value = result[BLUR_SETTING_STORAGE_KEY];
@@ -118,11 +102,6 @@ export function Popup() {
         return;
       }
 
-      const change = changes[LATEST_SCAN_STORAGE_KEY];
-      if (change?.newValue) {
-        setLatestScan(change.newValue as LatestScanSnapshot);
-      }
-
       const blurChange = changes[BLUR_SETTING_STORAGE_KEY];
       if (typeof blurChange?.newValue === "boolean") {
         setBlurEnabled(blurChange.newValue);
@@ -131,6 +110,86 @@ export function Popup() {
 
     chrome.storage.onChanged.addListener(handleStorageChange);
     return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
+
+  useEffect(() => {
+    if (typeof chrome === "undefined" || !chrome.tabs?.query) {
+      return;
+    }
+
+    let disposed = false;
+    let activeTabId: number | null = null;
+
+    const requestActiveTabScan = () => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (disposed) {
+          return;
+        }
+
+        const activeTab = tabs[0];
+        activeTabId = typeof activeTab?.id === "number" ? activeTab.id : null;
+        setCurrentPageLabel(activeTab?.title ?? "Halaman aktif");
+
+        if (activeTabId === null || !chrome.tabs?.sendMessage) {
+          setLatestScan(null);
+          return;
+        }
+
+        chrome.tabs.sendMessage(
+          activeTabId,
+          { type: GET_LATEST_SCAN_MESSAGE } satisfies JudolRuntimeMessage,
+          (response?: { snapshot?: LatestScanSnapshot | null }) => {
+            if (disposed) {
+              return;
+            }
+
+            if (chrome.runtime.lastError) {
+              setLatestScan(null);
+              return;
+            }
+
+            setLatestScan(response?.snapshot ?? null);
+          },
+        );
+      });
+    };
+
+    const handleRuntimeMessage = (
+      message: JudolRuntimeMessage,
+      sender: chrome.runtime.MessageSender,
+    ) => {
+      if (
+        message?.type !== SCAN_UPDATED_MESSAGE ||
+        sender.tab?.id !== activeTabId
+      ) {
+        return;
+      }
+
+      setLatestScan(message.snapshot);
+      setCurrentPageLabel(message.snapshot.title || message.snapshot.url);
+    };
+
+    const handleActivated = () => requestActiveTabScan();
+    const handleUpdated = (
+      tabId: number,
+      changeInfo: { status?: string; title?: string },
+    ) => {
+      if (tabId === activeTabId && (changeInfo.status === "complete" || changeInfo.title)) {
+        requestActiveTabScan();
+      }
+    };
+
+    requestActiveTabScan();
+    chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+    chrome.tabs.onActivated?.addListener(handleActivated);
+    chrome.tabs.onUpdated?.addListener(handleUpdated);
+
+    return () => {
+      disposed = true;
+      chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
+      chrome.tabs.onActivated?.removeListener(handleActivated);
+      chrome.tabs.onUpdated?.removeListener(handleUpdated);
+    };
   }, []);
 
   function handleBlurToggle(enabled: boolean): void {
@@ -231,11 +290,15 @@ export function Popup() {
       </section>
 
       <footer className="popup-footer">
-        <span>Threshold fuzzy: 0.82</span>
-        <span>{latestScan ? "Statistik halaman aktif" : "Menunggu scan halaman"}</span>
+        <span title={currentPageLabel}>{trimLabel(currentPageLabel)}</span>
+        <span>{latestScan ? "Realtime" : "Menunggu scan"}</span>
       </footer>
     </main>
   );
+}
+
+function trimLabel(label: string): string {
+  return label.length > 28 ? `${label.slice(0, 25)}...` : label;
 }
 
 function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {

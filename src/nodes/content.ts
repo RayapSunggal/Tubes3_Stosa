@@ -6,7 +6,10 @@ import { runFullDetector } from "../detector/fullDetector";
 import {
   BLUR_SETTING_STORAGE_KEY,
   DEFAULT_BLUR_ENABLED,
+  GET_LATEST_SCAN_MESSAGE,
   LATEST_SCAN_STORAGE_KEY,
+  SCAN_UPDATED_MESSAGE,
+  type JudolRuntimeMessage,
   type LatestScanSnapshot,
 } from "../shared/messaging";
 import type { DetectorInput, DetectorOutput } from "../shared/types";
@@ -26,6 +29,7 @@ let keywordsPromise: Promise<string[]> | null = null;
 let observer: MutationObserver | null = null;
 let scanTimeoutId: number | undefined;
 let blurEnabled = DEFAULT_BLUR_ENABLED;
+let latestScanSnapshot: LatestScanSnapshot | null = null;
 
 void bootstrapContentScript();
 
@@ -33,6 +37,7 @@ async function bootstrapContentScript(): Promise<void> {
   await waitForBody();
   blurEnabled = await loadBlurSetting();
   watchBlurSetting();
+  setupRuntimeMessaging();
   setupJudolTooltip();
   startObserver();
   scheduleScan(50);
@@ -143,11 +148,20 @@ function watchBlurSetting(): void {
   });
 }
 
-function storeLatestScan(output: DetectorOutput): void {
-  if (!chrome.storage?.local) {
-    return;
-  }
+function setupRuntimeMessaging(): void {
+  chrome.runtime.onMessage.addListener(
+    (message: JudolRuntimeMessage, _sender, sendResponse) => {
+      if (message?.type !== GET_LATEST_SCAN_MESSAGE) {
+        return false;
+      }
 
+      sendResponse({ snapshot: latestScanSnapshot });
+      return false;
+    },
+  );
+}
+
+function storeLatestScan(output: DetectorOutput): void {
   const snapshot: LatestScanSnapshot = {
     url: window.location.href,
     title: document.title,
@@ -155,9 +169,23 @@ function storeLatestScan(output: DetectorOutput): void {
     stats: output.stats,
   };
 
-  void chrome.storage.local.set({
-    [LATEST_SCAN_STORAGE_KEY]: snapshot,
-  });
+  latestScanSnapshot = snapshot;
+
+  if (chrome.storage?.local) {
+    void chrome.storage.local.set({
+      [LATEST_SCAN_STORAGE_KEY]: snapshot,
+    });
+  }
+
+  chrome.runtime.sendMessage(
+    {
+      type: SCAN_UPDATED_MESSAGE,
+      snapshot,
+    } satisfies JudolRuntimeMessage,
+    () => {
+      void chrome.runtime.lastError;
+    },
+  );
 }
 
 function loadKeywords(): Promise<string[]> {
