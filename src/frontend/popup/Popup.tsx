@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  BLUR_SETTING_STORAGE_KEY,
+  DEFAULT_BLUR_ENABLED,
   LATEST_SCAN_STORAGE_KEY,
   type LatestScanSnapshot,
 } from "../../shared/messaging";
@@ -76,7 +78,7 @@ const algorithmTones: Record<
 };
 
 export function Popup() {
-  const [blurEnabled, setBlurEnabled] = useState(true);
+  const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
   const [ocrEnabled, setOcrEnabled] = useState(true);
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
   const activeStats = useMemo(
@@ -101,6 +103,13 @@ export function Popup() {
       }
     });
 
+    chrome.storage.local.get(BLUR_SETTING_STORAGE_KEY, (result) => {
+      const value = result[BLUR_SETTING_STORAGE_KEY];
+      if (typeof value === "boolean") {
+        setBlurEnabled(value);
+      }
+    });
+
     const handleStorageChange = (
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
@@ -113,11 +122,28 @@ export function Popup() {
       if (change?.newValue) {
         setLatestScan(change.newValue as LatestScanSnapshot);
       }
+
+      const blurChange = changes[BLUR_SETTING_STORAGE_KEY];
+      if (typeof blurChange?.newValue === "boolean") {
+        setBlurEnabled(blurChange.newValue);
+      }
     };
 
     chrome.storage.onChanged.addListener(handleStorageChange);
     return () => chrome.storage.onChanged.removeListener(handleStorageChange);
   }, []);
+
+  function handleBlurToggle(enabled: boolean): void {
+    setBlurEnabled(enabled);
+
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      return;
+    }
+
+    void chrome.storage.local.set({
+      [BLUR_SETTING_STORAGE_KEY]: enabled,
+    });
+  }
 
   return (
     <main className="popup">
@@ -186,7 +212,7 @@ export function Popup() {
             <input
               type="checkbox"
               checked={blurEnabled}
-              onChange={(event) => setBlurEnabled(event.currentTarget.checked)}
+              onChange={(event) => handleBlurToggle(event.currentTarget.checked)}
             />
           </label>
 

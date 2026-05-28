@@ -1,8 +1,11 @@
 import { clearHighlights, highlightDetectorMatches } from "../content/highlighter";
+import { applyBlurToHighlights, clearBlurState } from "../content/blur";
 import { scanDocumentText } from "../content/domScanner";
 import { setupJudolTooltip } from "../content/tooltip";
 import { runFullDetector } from "../detector/fullDetector";
 import {
+  BLUR_SETTING_STORAGE_KEY,
+  DEFAULT_BLUR_ENABLED,
   LATEST_SCAN_STORAGE_KEY,
   type LatestScanSnapshot,
 } from "../shared/messaging";
@@ -22,11 +25,14 @@ const DEFAULT_OPTIONS = {
 let keywordsPromise: Promise<string[]> | null = null;
 let observer: MutationObserver | null = null;
 let scanTimeoutId: number | undefined;
+let blurEnabled = DEFAULT_BLUR_ENABLED;
 
 void bootstrapContentScript();
 
 async function bootstrapContentScript(): Promise<void> {
   await waitForBody();
+  blurEnabled = await loadBlurSetting();
+  watchBlurSetting();
   setupJudolTooltip();
   startObserver();
   scheduleScan(50);
@@ -70,6 +76,7 @@ async function scanAndHighlight(): Promise<void> {
   observer?.disconnect();
 
   try {
+    clearBlurState();
     clearHighlights();
 
     const [keywords, scan] = await Promise.all([
@@ -89,6 +96,7 @@ async function scanAndHighlight(): Promise<void> {
 
     const detectorOutput = runFullDetector(input);
     const highlightedCount = highlightDetectorMatches(scan, detectorOutput);
+    applyBlurToHighlights(blurEnabled);
     storeLatestScan(detectorOutput);
 
     console.info("[Judol Detector] scan complete", {
@@ -100,6 +108,39 @@ async function scanAndHighlight(): Promise<void> {
   } finally {
     startObserver();
   }
+}
+
+function loadBlurSetting(): Promise<boolean> {
+  if (!chrome.storage?.local) {
+    return Promise.resolve(DEFAULT_BLUR_ENABLED);
+  }
+
+  return new Promise((resolve) => {
+    chrome.storage.local.get(BLUR_SETTING_STORAGE_KEY, (result) => {
+      const value = result[BLUR_SETTING_STORAGE_KEY];
+      resolve(typeof value === "boolean" ? value : DEFAULT_BLUR_ENABLED);
+    });
+  });
+}
+
+function watchBlurSetting(): void {
+  if (!chrome.storage?.onChanged) {
+    return;
+  }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") {
+      return;
+    }
+
+    const change = changes[BLUR_SETTING_STORAGE_KEY];
+    if (!change || typeof change.newValue !== "boolean") {
+      return;
+    }
+
+    blurEnabled = change.newValue;
+    applyBlurToHighlights(blurEnabled);
+  });
 }
 
 function storeLatestScan(output: DetectorOutput): void {
