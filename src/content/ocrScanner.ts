@@ -13,7 +13,6 @@ const PREVIOUS_TABINDEX_DATA_KEY = "judolPreviousTabIndex";
 const NO_TABINDEX_SENTINEL = "__none__";
 const MIN_IMAGE_WIDTH = 72;
 const MIN_IMAGE_HEIGHT = 28;
-const MAX_IMAGES_PER_SCAN = 12;
 const MAX_CACHE_ENTRIES = 80;
 const OCR_TEXT_PREVIEW_LENGTH = 180;
 
@@ -31,6 +30,7 @@ interface OcrImageMatch {
   image: HTMLImageElement;
   text: string;
   detectorOutput: DetectorOutput;
+  ocrExecutionTimeMs: number;
 }
 
 export interface OcrScanOutput {
@@ -89,6 +89,7 @@ export async function scanImagesWithOcr(
         image,
         text: recognized.text,
         detectorOutput,
+        ocrExecutionTimeMs: recognized.executionTimeMs,
       });
     } catch (error) {
       stats.errorCount += 1;
@@ -122,8 +123,7 @@ export function clearOcrState(root: ParentNode = document): void {
 
 function collectReadableImages(root: ParentNode): HTMLImageElement[] {
   return Array.from(root.querySelectorAll<HTMLImageElement>("img"))
-    .filter(isReadableImage)
-    .slice(0, MAX_IMAGES_PER_SCAN);
+    .filter(isReadableImage);
 }
 
 function isReadableImage(image: HTMLImageElement): boolean {
@@ -278,7 +278,7 @@ function base64ToBlob(base64: string, contentType: string): Blob {
 }
 
 function markImageMatch(match: OcrImageMatch): void {
-  const { image, detectorOutput, text } = match;
+  const { image, detectorOutput, text, ocrExecutionTimeMs } = match;
   const algorithms = unique(
     detectorOutput.matches.flatMap((item) => item.algorithms),
   );
@@ -296,7 +296,7 @@ function markImageMatch(match: OcrImageMatch): void {
     keyword: keywords.join(", "),
     algorithm: `OCR, ${algorithms.join(", ")}`,
     count: detectorOutput.matches.length,
-    executionTimeMs: detectorTimeMs,
+    executionTimeMs: detectorTimeMs+ocrExecutionTimeMs,
     matchedText: createTextPreview(text),
   });
 }

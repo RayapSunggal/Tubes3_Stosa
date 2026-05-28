@@ -22,12 +22,16 @@ function regexMatcher(text: string, pattern: string, keyword: string): RawMatch[
   const matches: RawMatch[]=[];
   if (pattern.length===0) return matches;
 
-  const regex=new RegExp(`${escapeRegex(pattern)}\\d{2,3}`, "gi");
+  const regex=new RegExp(
+    `(^|[^\\p{L}\\p{N}_])(${escapeRegex(pattern)}\\d{2,3})(?![\\p{L}\\p{N}_])`,
+    "giu",
+  );
 
   let result: RegExpExecArray | null;
 
   while ((result=regex.exec(text))!==null) {
-    const matchedText=result[0];
+    const matchedText=result[2];
+    const start=result.index+result[1].length;
 
     if (matchedText.length===0) {
       regex.lastIndex++;
@@ -38,8 +42,8 @@ function regexMatcher(text: string, pattern: string, keyword: string): RawMatch[
       keyword,
       matchedText,
       algorithm: "RegEx",
-      start: result.index,
-      end: result.index+matchedText.length,
+      start,
+      end: start+matchedText.length,
       isPatternMatch: true,
     });
   }

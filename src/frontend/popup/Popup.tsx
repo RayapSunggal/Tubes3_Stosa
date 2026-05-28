@@ -34,6 +34,8 @@ interface PopupStatsView {
   }>;
 }
 
+type ScanStatus = "connecting" | "active" | "waiting" | "unavailable";
+
 const emptyStats: PopupStatsView = {
   scannedNodes: 0,
   detailLabel: "raw match",
@@ -50,10 +52,11 @@ const emptyStats: PopupStatsView = {
   algorithms: [
     { name: "KMP", matches: 0, timeMs: 0, comparisons: 0, tone: "green" as const },
     { name: "Boyer Moore", matches: 0, timeMs: 0, comparisons: 0, tone: "blue" as const },
-    { name: "RegEx", matches: 0, timeMs: 0, comparisons: 0, tone: "red" as const },
-    { name: "Weighted Levenshtein", matches: 0, timeMs: 0, comparisons: 0, tone: "amber" as const },
     { name: "Aho-Corasick", matches: 0, timeMs: 0, comparisons: 0, tone: "violet" as const },
     { name: "Rabin-Karp", matches: 0, timeMs: 0, comparisons: 0, tone: "cyan" as const },
+    { name: "RegEx", matches: 0, timeMs: 0, comparisons: 0, tone: "red" as const },
+    { name: "Weighted Levenshtein", matches: 0, timeMs: 0, comparisons: 0, tone: "amber" as const },
+    { name: "OCR", matches: 0, timeMs: 0, comparisons: 0, tone: "cyan" as const },
   ],
 };
 
@@ -74,6 +77,7 @@ export function Popup() {
   const [ocrEnabled, setOcrEnabled] = useState(DEFAULT_OCR_ENABLED);
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
   const [currentPageLabel, setCurrentPageLabel] = useState("Halaman aktif");
+  const [scanStatus, setScanStatus] = useState<ScanStatus>("connecting");
   const activeStats = useMemo(
     () => (latestScan ? createStatsView(latestScan) : emptyStats),
     [latestScan],
@@ -83,6 +87,8 @@ export function Popup() {
     () => activeStats.matchKinds.reduce((total, item) => total + item.value, 0),
     [activeStats.matchKinds],
   );
+  const statusLabel = getStatusLabel(scanStatus);
+  const footerStatusLabel = getFooterStatusLabel(scanStatus, latestScan);
 
   useEffect(() => {
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
@@ -130,13 +136,45 @@ export function Popup() {
 
   useEffect(() => {
     if (typeof chrome === "undefined" || !chrome.tabs?.query) {
+      setScanStatus("unavailable");
       return;
     }
 
     let disposed = false;
     let activeTabId: number | null = null;
 
-    const requestActiveTabScan = () => {
+    const injectContentScript = (tabId: number, onInjected: () => void) => {
+      if (!chrome.scripting?.executeScript) {
+        setScanStatus("unavailable");
+        setLatestScan(null);
+        return;
+      }
+
+      chrome.scripting.executeScript(
+        {
+          target: { tabId },
+          files: ["content.js"],
+        },
+        () => {
+          if (disposed) {
+            return;
+          }
+
+          const injectionError = chrome.runtime.lastError;
+          if (injectionError) {
+            setScanStatus("unavailable");
+            setLatestScan(null);
+            return;
+          }
+
+          window.setTimeout(onInjected, 150);
+        },
+      );
+    };
+
+    const requestActiveTabScan = (allowInjection = true) => {
+      setScanStatus("connecting");
+
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         if (disposed) {
           return;
@@ -144,27 +182,38 @@ export function Popup() {
 
         const activeTab = tabs[0];
         activeTabId = typeof activeTab?.id === "number" ? activeTab.id : null;
-        setCurrentPageLabel(activeTab?.title ?? "Halaman aktif");
+        setCurrentPageLabel(activeTab?.title ?? activeTab?.url ?? "Halaman aktif");
 
-        if (activeTabId === null || !chrome.tabs?.sendMessage) {
+        const tabId = activeTabId;
+        if (tabId === null || !chrome.tabs?.sendMessage || !canScanTab(activeTab)) {
+          setScanStatus("unavailable");
           setLatestScan(null);
           return;
         }
 
         chrome.tabs.sendMessage(
-          activeTabId,
+          tabId,
           { type: GET_LATEST_SCAN_MESSAGE } satisfies JudolRuntimeMessage,
           (response?: { snapshot?: LatestScanSnapshot | null }) => {
             if (disposed) {
               return;
             }
 
-            if (chrome.runtime.lastError) {
+            const messageError = chrome.runtime.lastError;
+            if (messageError) {
+              if (allowInjection) {
+                injectContentScript(tabId, () => requestActiveTabScan(false));
+                return;
+              }
+
+              setScanStatus("unavailable");
               setLatestScan(null);
               return;
             }
 
-            setLatestScan(response?.snapshot ?? null);
+            const snapshot = response?.snapshot ?? null;
+            setLatestScan(snapshot);
+            setScanStatus(snapshot ? "active" : "waiting");
           },
         );
       });
@@ -182,6 +231,7 @@ export function Popup() {
       }
 
       setLatestScan(message.snapshot);
+      setScanStatus("active");
       setCurrentPageLabel(message.snapshot.title || message.snapshot.url);
     };
 
@@ -239,9 +289,9 @@ export function Popup() {
           <p className="eyebrow">Judol Detector</p>
           <h1>Realtime Scan</h1>
         </div>
-        <span className="status-pill">
+        <span className={`status-pill ${scanStatus}`}>
           <span aria-hidden="true" />
-          Aktif
+          {statusLabel}
         </span>
       </header>
 
@@ -319,7 +369,7 @@ export function Popup() {
 
       <footer className="popup-footer">
         <span title={currentPageLabel}>{trimLabel(currentPageLabel)}</span>
-        <span>{latestScan ? "Realtime" : "Menunggu scan"}</span>
+        <span>{footerStatusLabel}</span>
       </footer>
     </main>
   );
@@ -327,6 +377,42 @@ export function Popup() {
 
 function trimLabel(label: string): string {
   return label.length > 28 ? `${label.slice(0, 25)}...` : label;
+}
+
+function canScanTab(tab: chrome.tabs.Tab | undefined): boolean {
+  const url = tab?.url ?? "";
+  return /^(https?|file):\/\//iu.test(url);
+}
+
+function getStatusLabel(status: ScanStatus): string {
+  switch (status) {
+    case "active":
+      return "Aktif";
+    case "waiting":
+      return "Scan";
+    case "unavailable":
+      return "Tidak aktif";
+    default:
+      return "Memuat";
+  }
+}
+
+function getFooterStatusLabel(
+  status: ScanStatus,
+  snapshot: LatestScanSnapshot | null,
+): string {
+  if (status === "active" && snapshot) {
+    return "Realtime";
+  }
+
+  switch (status) {
+    case "waiting":
+      return "Menunggu hasil";
+    case "unavailable":
+      return "Tidak bisa scan";
+    default:
+      return "Menghubungkan";
+  }
 }
 
 function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
@@ -368,13 +454,22 @@ function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
                 : ("Detected" as const),
           }))
         : [{ keyword: "Belum ada", count: 0, kind: "Detected" as const }],
-    algorithms: stats.algorithmStats.map((item) => ({
-      name: formatAlgorithmName(item.algorithm),
-      matches: item.matchCount,
-      timeMs: item.executionTimeMs,
-      comparisons: item.comparisons,
-      tone: algorithmTones[item.algorithm],
-    })),
+    algorithms: [
+      ...stats.algorithmStats.map((item) => ({
+        name: formatAlgorithmName(item.algorithm),
+        matches: item.matchCount,
+        timeMs: item.executionTimeMs,
+        comparisons: item.comparisons,
+        tone: algorithmTones[item.algorithm],
+      })),
+      {
+        name: "OCR",
+        matches: ocrMatchCount,
+        timeMs: ocrStats?.executionTimeMs ?? 0,
+        comparisons: 0,
+        tone: "cyan" as const,
+      },
+    ],
   };
 }
 

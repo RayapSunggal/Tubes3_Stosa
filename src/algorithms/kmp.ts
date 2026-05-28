@@ -25,7 +25,7 @@ function buildLps(pattern: string): number[] {
 
   return lps;
 }
-//keyword untuk pengembangkan fuzzy 
+
 function kmp(text: string, pattern: string, keyword: string): RawMatch[] {
   const matches: RawMatch[]=[];
   const n=text.length;

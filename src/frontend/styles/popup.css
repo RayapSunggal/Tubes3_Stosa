@@ -97,6 +97,36 @@ h3 {
   box-shadow: 0 0 0 4px #d9f2e8;
 }
 
+.status-pill.connecting {
+  border-color: #d2dde1;
+  color: #4f6268;
+}
+
+.status-pill.connecting span {
+  background: #6f7f85;
+  box-shadow: 0 0 0 4px #e1e8ea;
+}
+
+.status-pill.waiting {
+  border-color: #e5cc91;
+  color: #85620f;
+}
+
+.status-pill.waiting span {
+  background: #ce8a1d;
+  box-shadow: 0 0 0 4px #f5e6c1;
+}
+
+.status-pill.unavailable {
+  border-color: #efc7c7;
+  color: #7a2930;
+}
+
+.status-pill.unavailable span {
+  background: #d64f45;
+  box-shadow: 0 0 0 4px #f5d8d6;
+}
+
 .summary-grid,
 .kind-grid {
   display: grid;

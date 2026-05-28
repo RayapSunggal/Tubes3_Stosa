@@ -71,17 +71,18 @@ function normalizeThreshold(threshold: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold: number, candidates: TokenCandidate[]): RawMatch[] {
+function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold: number, tokens: TokenCandidate[]): RawMatch[] {
   const matches: RawMatch[]=[];
-  const m=pattern.length;
-  if (m===0 || candidates.length===0 || hasWhitespace(pattern)) return matches;
+  const target=normalizeComparableText(pattern);
+  const m=target.length;
+  if (m===0 || tokens.length===0) return matches;
 
-  const target=pattern.toLowerCase();
   const limit=normalizeThreshold(threshold);
   const slack=Math.ceil(m*(1-limit));
   const minLen=Math.max(1, m-slack);
   const maxLen=m+slack;
   const cache=new Map<string, { distance: number; similarity: number } | null>();
+  const candidates=createFuzzyCandidates(pattern, tokens, text);
 
   for (const candidate of candidates) {
     const len=candidate.lowerText.length;
@@ -112,6 +113,38 @@ function fuzzyMatcher(text: string, pattern: string, keyword: string, threshold:
   return matches;
 }
 
+function createFuzzyCandidates(
+  pattern: string,
+  tokens: TokenCandidate[],
+  text: string,
+): TokenCandidate[] {
+  const patternTokenCount=countTokens(pattern);
+
+  if (patternTokenCount<=1) {
+    return tokens;
+  }
+
+  const candidates: TokenCandidate[]=[];
+  for (let i=0; i<=tokens.length-patternTokenCount; i++) {
+    const startToken=tokens[i];
+    const endToken=tokens[i+patternTokenCount-1];
+    const value=text.slice(startToken.start, endToken.end);
+
+    candidates.push({
+      text: value,
+      lowerText: normalizeComparableText(value),
+      start: startToken.start,
+      end: endToken.end,
+    });
+  }
+
+  return candidates;
+}
+
+function normalizeComparableText(value: string): string {
+  return value.toLowerCase().replace(/\s+/gu, " ").trim();
+}
+
 function scoreCandidate(source: string, target: string, limit: number): { distance: number; similarity: number } | null {
   if (!hasSharedVisualGroup(source, target)) {
     return null;
@@ -127,16 +160,6 @@ function scoreCandidate(source: string, target: string, limit: number): { distan
   return { distance, similarity };
 }
 
-function hasWhitespace(value: string): boolean {
-  for (let i=0; i<value.length; i++) {
-    if (value[i].trim().length===0) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function hasSharedVisualGroup(source: string, target: string): boolean {
   for (const sourceChar of source) {
     for (const targetChar of target) {
@@ -147,6 +170,17 @@ function hasSharedVisualGroup(source: string, target: string): boolean {
   }
 
   return false;
+}
+
+function countTokens(value: string): number {
+  const regex=/[\p{L}\p{N}_@!$]+/giu;
+  let count=0;
+
+  while (regex.exec(value)!==null) {
+    count++;
+  }
+
+  return count;
 }
 
 function extractTokenCandidates(text: string): TokenCandidate[] {

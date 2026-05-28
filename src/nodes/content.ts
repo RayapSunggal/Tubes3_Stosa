@@ -35,21 +35,58 @@ let scanTimeoutId: number | undefined;
 let blurEnabled = DEFAULT_BLUR_ENABLED;
 let ocrEnabled = DEFAULT_OCR_ENABLED;
 let latestScanSnapshot: LatestScanSnapshot | null = null;
+let isScanRunning = false;
+let rescanRequested = false;
+let extensionContextActive = true;
+let contextInvalidationReported = false;
+let runtimeMessageListener:
+  | ((
+      message: JudolRuntimeMessage,
+      sender: chrome.runtime.MessageSender,
+      sendResponse: (response: { snapshot: LatestScanSnapshot | null }) => void,
+    ) => boolean)
+  | null = null;
+let storageChangeListener:
+  | ((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void)
+  | null = null;
+let loadListener: (() => void) | null = null;
 
+const runtimeWindow = window as Window & {
+  __judolDetectorContentCleanup?: () => void;
+};
+
+try {
+  runtimeWindow.__judolDetectorContentCleanup?.();
+}
+catch {
+}
+
+runtimeWindow.__judolDetectorContentCleanup = deactivateContentScript;
 void bootstrapContentScript();
 
 async function bootstrapContentScript(): Promise<void> {
-  await waitForBody();
-  [blurEnabled, ocrEnabled] = await Promise.all([
-    loadBooleanSetting(BLUR_SETTING_STORAGE_KEY, DEFAULT_BLUR_ENABLED),
-    loadBooleanSetting(OCR_SETTING_STORAGE_KEY, DEFAULT_OCR_ENABLED),
-  ]);
-  watchStoredSettings();
-  setupRuntimeMessaging();
-  setupJudolTooltip();
-  window.addEventListener("load", () => scheduleScan(500), { once: true });
-  startObserver();
-  scheduleScan(50);
+  try {
+    if (!isExtensionContextAvailable()) {
+      return;
+    }
+
+    await waitForBody();
+    [blurEnabled, ocrEnabled] = await Promise.all([
+      loadBooleanSetting(BLUR_SETTING_STORAGE_KEY, DEFAULT_BLUR_ENABLED),
+      loadBooleanSetting(OCR_SETTING_STORAGE_KEY, DEFAULT_OCR_ENABLED),
+    ]);
+    watchStoredSettings();
+    setupRuntimeMessaging();
+    setupJudolTooltip();
+    loadListener = () => scheduleScan(500);
+    window.addEventListener("load", loadListener, { once: true });
+    startObserver();
+    scheduleScan(50);
+  } catch (error) {
+    if (!handleExtensionContextError(error)) {
+      console.error("[Judol Detector] bootstrap failed", error);
+    }
+  }
 }
 
 function waitForBody(): Promise<void> {
@@ -63,10 +100,11 @@ function waitForBody(): Promise<void> {
 }
 
 function startObserver(): void {
-  if (!document.body) {
+  if (!document.body || !isExtensionContextAvailable()) {
     return;
   }
 
+  observer?.disconnect();
   observer = new MutationObserver(() => scheduleScan(350));
   observer.observe(document.body, {
     childList: true,
@@ -76,6 +114,15 @@ function startObserver(): void {
 }
 
 function scheduleScan(delayMs: number): void {
+  if (!isExtensionContextAvailable()) {
+    return;
+  }
+
+  if (isScanRunning) {
+    rescanRequested = true;
+    return;
+  }
+
   window.clearTimeout(scanTimeoutId);
   scanTimeoutId = window.setTimeout(() => {
     void scanAndHighlight();
@@ -83,10 +130,17 @@ function scheduleScan(delayMs: number): void {
 }
 
 async function scanAndHighlight(): Promise<void> {
-  if (!document.body) {
+  if (!document.body || !isExtensionContextAvailable()) {
     return;
   }
 
+  if (isScanRunning) {
+    rescanRequested = true;
+    return;
+  }
+
+  isScanRunning = true;
+  let observerRestarted = false;
   observer?.disconnect();
 
   try {
@@ -107,6 +161,9 @@ async function scanAndHighlight(): Promise<void> {
 
     const detectorOutput = runFullDetector(input);
     const highlightedCount = highlightDetectorMatches(scan, detectorOutput);
+    startObserver();
+    observerRestarted = true;
+
     const ocrOutput = ocrEnabled
       ? await scanImagesWithOcr(document.body, keywords, DEFAULT_OPTIONS)
       : { stats: createEmptyOcrStats() };
@@ -120,14 +177,24 @@ async function scanAndHighlight(): Promise<void> {
       ocrMatches: ocrOutput.stats.matchCount,
     });
   } catch (error) {
-    console.error("[Judol Detector] scan failed", error);
+    if (!handleExtensionContextError(error)) {
+      console.error("[Judol Detector] scan failed", error);
+    }
   } finally {
-    startObserver();
+    if (extensionContextActive && !observerRestarted) {
+      startObserver();
+    }
+
+    isScanRunning = false;
+    if (extensionContextActive && rescanRequested) {
+      rescanRequested = false;
+      scheduleScan(100);
+    }
   }
 }
 
 function loadBooleanSetting(key: string, fallback: boolean): Promise<boolean> {
-  if (!chrome.storage?.local) {
+  if (!isExtensionContextAvailable() || !chrome.storage?.local) {
     return Promise.resolve(fallback);
   }
 
@@ -140,11 +207,11 @@ function loadBooleanSetting(key: string, fallback: boolean): Promise<boolean> {
 }
 
 function watchStoredSettings(): void {
-  if (!chrome.storage?.onChanged) {
+  if (!isExtensionContextAvailable() || !chrome.storage?.onChanged) {
     return;
   }
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  storageChangeListener = (changes, areaName) => {
     if (areaName !== "local") {
       return;
     }
@@ -168,23 +235,41 @@ function watchStoredSettings(): void {
       ocrEnabled = ocrChange.newValue;
       scheduleScan(100);
     }
-  });
+  };
+
+  try {
+    chrome.storage.onChanged.addListener(storageChangeListener);
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
 }
 
 function setupRuntimeMessaging(): void {
-  chrome.runtime.onMessage.addListener(
-    (message: JudolRuntimeMessage, _sender, sendResponse) => {
-      if (message?.type !== GET_LATEST_SCAN_MESSAGE) {
-        return false;
-      }
+  if (!isExtensionContextAvailable()) {
+    return;
+  }
 
-      sendResponse({ snapshot: latestScanSnapshot });
+  runtimeMessageListener = (message: JudolRuntimeMessage, _sender, sendResponse) => {
+    if (message?.type !== GET_LATEST_SCAN_MESSAGE) {
       return false;
-    },
-  );
+    }
+
+    sendResponse({ snapshot: latestScanSnapshot });
+    return false;
+  };
+
+  try {
+    chrome.runtime.onMessage.addListener(runtimeMessageListener);
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
 }
 
 function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
+  if (!isExtensionContextAvailable()) {
+    return;
+  }
+
   const snapshot: LatestScanSnapshot = {
     url: window.location.href,
     title: document.title,
@@ -195,21 +280,25 @@ function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
 
   latestScanSnapshot = snapshot;
 
-  if (chrome.storage?.local) {
-    void chrome.storage.local.set({
-      [LATEST_SCAN_STORAGE_KEY]: snapshot,
-    });
-  }
+  try {
+    if (chrome.storage?.local) {
+      void chrome.storage.local.set({
+        [LATEST_SCAN_STORAGE_KEY]: snapshot,
+      });
+    }
 
-  chrome.runtime.sendMessage(
-    {
-      type: SCAN_UPDATED_MESSAGE,
-      snapshot,
-    } satisfies JudolRuntimeMessage,
-    () => {
-      void chrome.runtime.lastError;
-    },
-  );
+    chrome.runtime.sendMessage(
+      {
+        type: SCAN_UPDATED_MESSAGE,
+        snapshot,
+      } satisfies JudolRuntimeMessage,
+      () => {
+        void chrome.runtime.lastError;
+      },
+    );
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
 }
 
 function createEmptyOcrStats(): OcrStats {
@@ -229,6 +318,10 @@ function loadKeywords(): Promise<string[]> {
     return keywordsPromise;
   }
 
+  if (!isExtensionContextAvailable()) {
+    return Promise.reject(new Error("Extension context invalidated"));
+  }
+
   const keywordUrl = chrome.runtime.getURL("keyword.txt");
   keywordsPromise = fetch(keywordUrl)
     .then((response) => response.text())
@@ -240,4 +333,76 @@ function loadKeywords(): Promise<string[]> {
     );
 
   return keywordsPromise;
+}
+
+function isExtensionContextAvailable(): boolean {
+  if (!extensionContextActive) {
+    return false;
+  }
+
+  try {
+    if (typeof chrome === "undefined" || !chrome.runtime?.id) {
+      deactivateContentScript();
+      return false;
+    }
+  } catch (error) {
+    handleExtensionContextError(error);
+    return false;
+  }
+
+  return true;
+}
+
+function handleExtensionContextError(error: unknown): boolean {
+  if (!isExtensionContextError(error)) {
+    return false;
+  }
+
+  if (!contextInvalidationReported) {
+    contextInvalidationReported = true;
+    console.warn(
+      "[Judol Detector] extension context invalidated. Reload this tab after reloading the extension.",
+    );
+  }
+
+  deactivateContentScript();
+  return true;
+}
+
+function isExtensionContextError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /extension context invalidated|context invalidated/iu.test(message);
+}
+
+function deactivateContentScript(): void {
+  extensionContextActive = false;
+  window.clearTimeout(scanTimeoutId);
+  observer?.disconnect();
+  observer = null;
+  rescanRequested = false;
+
+  if (loadListener) {
+    window.removeEventListener("load", loadListener);
+    loadListener = null;
+  }
+
+  try {
+    if (runtimeMessageListener && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.removeListener(runtimeMessageListener);
+    }
+  } catch {
+  }
+  runtimeMessageListener = null;
+
+  try {
+    if (storageChangeListener && chrome.storage?.onChanged) {
+      chrome.storage.onChanged.removeListener(storageChangeListener);
+    }
+  } catch {
+  }
+  storageChangeListener = null;
+
+  if (runtimeWindow.__judolDetectorContentCleanup === deactivateContentScript) {
+    delete runtimeWindow.__judolDetectorContentCleanup;
+  }
 }

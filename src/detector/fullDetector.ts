@@ -15,13 +15,6 @@ import type {
   RawMatch,
 } from "../shared/types";
 
-const EXACT_ALGORITHMS: AlgorithmName[] = [
-  "KMP",
-  "BoyerMoore",
-  "AhoCorasick",
-  "RabinKarp",
-];
-
 const MATCH_KIND_ORDER: MatchKind[] = ["exact", "regex", "fuzzy"];
 
 type AlgorithmRunner = (input: DetectorInput) => RawMatch[];
@@ -43,14 +36,6 @@ export function runFullDetector(input: DetectorInput): DetectorOutput {
   const sanitizedInput = sanitizeInput(input);
   const exactResults = runExactAlgorithms(sanitizedInput);
   const exactMatches = exactResults.flatMap((result) => result.matches);
-  const exactKeywords = collectMatchedKeywords(exactMatches);
-  const fuzzyKeywords = sanitizedInput.keywords.filter(
-    (keyword) => !exactKeywords.has(keyword),
-  );
-  const fuzzyInput: DetectorInput = {
-    ...sanitizedInput,
-    keywords: fuzzyKeywords,
-  };
 
   const regexResult = runConfiguredAlgorithm({
     algorithm: "RegEx",
@@ -62,23 +47,25 @@ export function runFullDetector(input: DetectorInput): DetectorOutput {
 
   const fuzzyResult = runConfiguredAlgorithm({
     algorithm: "WeightedLevenshtein",
-    enabled: sanitizedInput.options.enableFuzzy && fuzzyKeywords.length > 0,
+    enabled: sanitizedInput.options.enableFuzzy,
     runner: runWeightedLevenshtein,
-    input: fuzzyInput,
+    input: sanitizedInput,
     filterBoundaries: true,
   });
 
-  const algorithmStats = [
+  const baseAlgorithmStats = [
     ...exactResults.map((result) => result.stats),
     regexResult.stats,
     fuzzyResult.stats,
   ];
+  const nonFuzzyMatches = [...exactMatches, ...regexResult.matches];
   const rawMatches = [
     ...exactMatches,
     ...regexResult.matches,
-    ...removeMatchesCoveredBy(exactMatches, fuzzyResult.matches),
+    ...removeMatchesCoveredBy(nonFuzzyMatches, fuzzyResult.matches),
   ].sort(compareMatches);
   const matches = mergeMatches(sanitizedInput.text, rawMatches);
+  const algorithmStats = syncAlgorithmMatchCounts(baseAlgorithmStats, matches);
 
   return {
     rawMatches,
@@ -233,28 +220,6 @@ function isTokenCharacter(char: string): boolean {
   return /[\p{L}\p{N}_]/u.test(char);
 }
 
-function collectMatchedKeywords(matches: RawMatch[]): Set<string> {
-  const keywords = new Set<string>();
-
-  for (const match of matches) {
-    if (isExactAlgorithm(match.algorithm)) {
-      keywords.add(match.keyword);
-    }
-  }
-
-  return keywords;
-}
-
-function isExactAlgorithm(algorithm: AlgorithmName): boolean {
-  for (const exactAlgorithm of EXACT_ALGORITHMS) {
-    if (algorithm === exactAlgorithm) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function removeMatchesCoveredBy(coveredBy: RawMatch[], candidates: RawMatch[]): RawMatch[] {
   return candidates.filter((candidate) => {
     for (const match of coveredBy) {
@@ -265,6 +230,24 @@ function removeMatchesCoveredBy(coveredBy: RawMatch[], candidates: RawMatch[]): 
 
     return true;
   });
+}
+
+function syncAlgorithmMatchCounts(
+  stats: AlgorithmExecutionStats[],
+  matches: MergedMatch[],
+): AlgorithmExecutionStats[] {
+  const counts: Partial<Record<AlgorithmName, number>> = {};
+
+  for (const match of matches) {
+    for (const algorithm of match.algorithms) {
+      counts[algorithm] = (counts[algorithm] ?? 0) + 1;
+    }
+  }
+
+  return stats.map((item) => ({
+    ...item,
+    matchCount: counts[item.algorithm] ?? 0,
+  }));
 }
 
 function mergeMatches(text: string, rawMatches: RawMatch[]): MergedMatch[] {
