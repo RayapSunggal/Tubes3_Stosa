@@ -11,6 +11,8 @@ interface StatsPanelProps {
 }
 
 export function StatsPanel({ algorithms }: StatsPanelProps) {
+  const totalMatches = algorithms.reduce((total, item) => total + item.matches, 0);
+
   return (
     <section className="section" aria-labelledby="algorithm-stats-title">
       <div className="section-heading">
@@ -18,9 +20,7 @@ export function StatsPanel({ algorithms }: StatsPanelProps) {
           <p className="section-kicker">Algoritma</p>
           <h2 id="algorithm-stats-title">Waktu dan match</h2>
         </div>
-        <span className="section-value">
-          {algorithms.reduce((total, item) => total + item.matches, 0)}
-        </span>
+        <span className="section-value">Raw match: {totalMatches}</span>
       </div>
 
       <div className="algorithm-list">

@@ -356,9 +356,9 @@ export function Popup() {
 
       <section className="summary-grid" aria-label="Ringkasan deteksi">
         <article className="summary-tile">
-          <span className="tile-label">Keyword ditemukan</span>
+          <span className="tile-label">Keyword unik ditemukan</span>
           <strong>{activeStats.totalKeywords}</strong>
-          <small>{activeStats.totalMatches} total match</small>
+          <small>{activeStats.totalMatches} total match terdeteksi</small>
         </article>
         <article className="summary-tile">
           <span className="tile-label">Waktu eksekusi</span>
@@ -375,7 +375,7 @@ export function Popup() {
             <p className="section-kicker">Hirarki</p>
             <h2 id="kind-title">Jenis matching</h2>
           </div>
-          <span className="section-value">{kindTotal}</span>
+          <span className="section-value">Total match: {kindTotal}</span>
         </div>
 
         <div className="kind-grid">

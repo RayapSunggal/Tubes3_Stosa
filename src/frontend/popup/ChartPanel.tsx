@@ -10,6 +10,7 @@ interface ChartPanelProps {
 
 export function ChartPanel({ keywords }: ChartPanelProps) {
   const maxCount = keywords.reduce((max, item) => Math.max(max, item.count), 1);
+  const visibleKeywordCount = keywords.filter((item) => item.count > 0).length;
 
   return (
     <section className="section" aria-labelledby="keyword-chart-title">
@@ -18,7 +19,7 @@ export function ChartPanel({ keywords }: ChartPanelProps) {
           <p className="section-kicker">Keyword</p>
           <h2 id="keyword-chart-title">Perbandingan temuan</h2>
         </div>
-        <span className="section-value">{keywords.length}</span>
+        <span className="section-value">Keyword unik: {visibleKeywordCount}</span>
       </div>
 
       <div className="keyword-chart" aria-label="Perbandingan jumlah keyword">
