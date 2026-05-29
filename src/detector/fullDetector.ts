@@ -16,8 +16,20 @@ import type {
 } from "../shared/types";
 
 const MATCH_KIND_ORDER: MatchKind[] = ["exact", "regex", "fuzzy"];
+const ALGORITHM_ORDER: AlgorithmName[] = [
+  "KMP",
+  "BoyerMoore",
+  "AhoCorasick",
+  "RabinKarp",
+  "RegEx",
+  "WeightedLevenshtein",
+];
 
 type AlgorithmRunner = (input: DetectorInput) => RawMatch[];
+type DetectorProgressCallback = (
+  output: DetectorOutput,
+  algorithm: AlgorithmName,
+) => void | Promise<void>;
 
 interface RunnerConfig {
   algorithm: AlgorithmName;
@@ -35,7 +47,6 @@ interface RunResult {
 export function runFullDetector(input: DetectorInput): DetectorOutput {
   const sanitizedInput = sanitizeInput(input);
   const exactResults = runExactAlgorithms(sanitizedInput);
-  const exactMatches = exactResults.flatMap((result) => result.matches);
 
   const regexResult = runConfiguredAlgorithm({
     algorithm: "RegEx",
@@ -53,19 +64,85 @@ export function runFullDetector(input: DetectorInput): DetectorOutput {
     filterBoundaries: true,
   });
 
-  const baseAlgorithmStats = [
-    ...exactResults.map((result) => result.stats),
-    regexResult.stats,
-    fuzzyResult.stats,
-  ];
-  const nonFuzzyMatches = [...exactMatches, ...regexResult.matches];
+  return createDetectorOutput(
+    sanitizedInput.text,
+    exactResults,
+    regexResult,
+    fuzzyResult,
+  );
+}
+
+export async function runFullDetectorProgressively(
+  input: DetectorInput,
+  onProgress: DetectorProgressCallback,
+): Promise<DetectorOutput> {
+  const sanitizedInput = sanitizeInput(input);
+  const exactResults: RunResult[] = [];
+
+  for (const config of createExactAlgorithmConfigs(sanitizedInput)) {
+    const result = runConfiguredAlgorithm(config);
+    exactResults.push(result);
+    await onProgress(
+      createDetectorOutput(sanitizedInput.text, exactResults),
+      config.algorithm,
+    );
+  }
+
+  const regexResult = runConfiguredAlgorithm({
+    algorithm: "RegEx",
+    enabled: sanitizedInput.options.enableRegex,
+    runner: runRegexMatcher,
+    input: sanitizedInput,
+    filterBoundaries: false,
+  });
+  await onProgress(
+    createDetectorOutput(sanitizedInput.text, exactResults, regexResult),
+    "RegEx",
+  );
+
+  const fuzzyResult = runConfiguredAlgorithm({
+    algorithm: "WeightedLevenshtein",
+    enabled: sanitizedInput.options.enableFuzzy,
+    runner: runWeightedLevenshtein,
+    input: sanitizedInput,
+    filterBoundaries: true,
+  });
+  const output = createDetectorOutput(
+    sanitizedInput.text,
+    exactResults,
+    regexResult,
+    fuzzyResult,
+  );
+  await onProgress(output, "WeightedLevenshtein");
+
+  return output;
+}
+
+function createDetectorOutput(
+  text: string,
+  exactResults: RunResult[],
+  regexResult?: RunResult,
+  fuzzyResult?: RunResult,
+): DetectorOutput {
+  const exactMatches = exactResults.flatMap((result) => result.matches);
+  const regexMatches = regexResult?.matches ?? [];
+  const fuzzyMatches = fuzzyResult?.matches ?? [];
+  const nonFuzzyMatches = [...exactMatches, ...regexMatches];
   const rawMatches = [
     ...exactMatches,
-    ...regexResult.matches,
-    ...removeMatchesCoveredBy(nonFuzzyMatches, fuzzyResult.matches),
+    ...regexMatches,
+    ...removeMatchesCoveredBy(nonFuzzyMatches, fuzzyMatches),
   ].sort(compareMatches);
-  const matches = mergeMatches(sanitizedInput.text, rawMatches);
-  const algorithmStats = syncAlgorithmMatchCounts(baseAlgorithmStats, matches);
+  const matches = mergeMatches(text, rawMatches);
+  const baseAlgorithmStats = [
+    ...exactResults.map((result) => result.stats),
+    ...(regexResult ? [regexResult.stats] : []),
+    ...(fuzzyResult ? [fuzzyResult.stats] : []),
+  ];
+  const algorithmStats = syncAlgorithmMatchCounts(
+    completeAlgorithmStats(baseAlgorithmStats),
+    matches,
+  );
 
   return {
     rawMatches,
@@ -109,35 +186,39 @@ function sanitizeInput(input: DetectorInput): DetectorInput {
 }
 
 function runExactAlgorithms(input: DetectorInput): RunResult[] {
+  return createExactAlgorithmConfigs(input).map(runConfiguredAlgorithm);
+}
+
+function createExactAlgorithmConfigs(input: DetectorInput): RunnerConfig[] {
   return [
-    runConfiguredAlgorithm({
+    {
       algorithm: "KMP",
       enabled: input.options.enableKMP,
       runner: runKmp,
       input,
       filterBoundaries: true,
-    }),
-    runConfiguredAlgorithm({
+    },
+    {
       algorithm: "BoyerMoore",
       enabled: input.options.enableBoyerMoore,
       runner: runBoyerMoore,
       input,
       filterBoundaries: true,
-    }),
-    runConfiguredAlgorithm({
+    },
+    {
       algorithm: "AhoCorasick",
       enabled: input.options.enableAhoCorasick === true,
       runner: runAhoCorasick,
       input,
       filterBoundaries: true,
-    }),
-    runConfiguredAlgorithm({
+    },
+    {
       algorithm: "RabinKarp",
       enabled: input.options.enableRabinKarp === true,
       runner: runRabinKarp,
       input,
       filterBoundaries: true,
-    }),
+    },
   ];
 }
 
@@ -248,6 +329,26 @@ function syncAlgorithmMatchCounts(
     ...item,
     matchCount: counts[item.algorithm] ?? 0,
   }));
+}
+
+function completeAlgorithmStats(
+  stats: AlgorithmExecutionStats[],
+): AlgorithmExecutionStats[] {
+  const statsByAlgorithm = new Map<AlgorithmName, AlgorithmExecutionStats>();
+
+  for (const item of stats) {
+    statsByAlgorithm.set(item.algorithm, item);
+  }
+
+  return ALGORITHM_ORDER.map(
+    (algorithm) =>
+      statsByAlgorithm.get(algorithm) ?? {
+        algorithm,
+        matchCount: 0,
+        executionTimeMs: 0,
+        comparisons: 0,
+      },
+  );
 }
 
 function mergeMatches(text: string, rawMatches: RawMatch[]): MergedMatch[] {
@@ -362,22 +463,13 @@ function compareMatches(left: RawMatch, right: RawMatch): number {
 }
 
 function algorithmRank(algorithm: AlgorithmName): number {
-  const order: AlgorithmName[] = [
-    "KMP",
-    "BoyerMoore",
-    "AhoCorasick",
-    "RabinKarp",
-    "RegEx",
-    "WeightedLevenshtein",
-  ];
-
-  for (let i = 0; i < order.length; i++) {
-    if (order[i] === algorithm) {
+  for (let i = 0; i < ALGORITHM_ORDER.length; i++) {
+    if (ALGORITHM_ORDER[i] === algorithm) {
       return i;
     }
   }
 
-  return order.length;
+  return ALGORITHM_ORDER.length;
 }
 
 function matchKindRank(kind: MatchKind): number {

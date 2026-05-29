@@ -3,7 +3,7 @@ import { applyBlurToHighlights, clearBlurState } from "../content/blur";
 import { scanDocumentText } from "../content/domScanner";
 import { clearOcrState, scanImagesWithOcr } from "../content/ocrScanner";
 import { setupJudolTooltip } from "../content/tooltip";
-import { runFullDetector } from "../detector/fullDetector";
+import { runFullDetectorProgressively } from "../detector/fullDetector";
 import {
   AHO_CORASICK_SETTING_STORAGE_KEY,
   BLUR_SETTING_STORAGE_KEY,
@@ -208,7 +208,19 @@ async function scanAndHighlight(): Promise<void> {
       options: detectorOptions,
     };
 
-    detectorOutput = runFullDetector(input);
+    detectorOutput = await runFullDetectorProgressively(
+      input,
+      async (progressOutput, algorithm) => {
+        detectorOutput = progressOutput;
+        publishScanProgress(
+          progressOutput.stats,
+          ocrStats,
+          scanStartedAt,
+          `Memproses ${formatAlgorithmName(algorithm)}`,
+        );
+        await waitForProgressPaint();
+      },
+    );
     publishScanProgress(
       detectorOutput.stats,
       ocrStats,
@@ -449,6 +461,27 @@ function createEmptyDetectorStats(): DetectorStats {
       comparisons: 0,
     })),
   };
+}
+
+function waitForProgressPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, 0);
+  });
+}
+
+function formatAlgorithmName(algorithm: AlgorithmName): string {
+  switch (algorithm) {
+    case "BoyerMoore":
+      return "Boyer Moore";
+    case "WeightedLevenshtein":
+      return "Weighted Levenshtein";
+    case "AhoCorasick":
+      return "Aho-Corasick";
+    case "RabinKarp":
+      return "Rabin-Karp";
+    default:
+      return algorithm;
+  }
 }
 
 function createEmptyOcrStats(): OcrStats {
