@@ -3,10 +3,13 @@
   "name": "Tubes3 Stosa",
   "version": "1.0.1",
   "description": "A Chrome extension built with React, TypeScript, and Vite.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting", "tabs"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {

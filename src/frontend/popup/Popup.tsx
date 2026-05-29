@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BLUR_SETTING_STORAGE_KEY,
   DEFAULT_BLUR_ENABLED,
+  ENSURE_CONTENT_SCRIPT_MESSAGE,
+  type EnsureContentScriptResponse,
   GET_LATEST_SCAN_MESSAGE,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
@@ -135,22 +137,11 @@ export function Popup() {
           return;
         }
 
-        chrome.tabs.sendMessage(
-          activeTabId,
-          { type: GET_LATEST_SCAN_MESSAGE } satisfies JudolRuntimeMessage,
-          (response?: { snapshot?: LatestScanSnapshot | null }) => {
-            if (disposed) {
-              return;
-            }
-
-            if (chrome.runtime.lastError) {
-              setLatestScan(null);
-              return;
-            }
-
-            setLatestScan(response?.snapshot ?? null);
-          },
-        );
+        requestScanFromTab(activeTabId, (snapshot) => {
+          if (!disposed) {
+            setLatestScan(snapshot);
+          }
+        });
       });
     };
 
@@ -191,6 +182,50 @@ export function Popup() {
       chrome.tabs.onUpdated?.removeListener(handleUpdated);
     };
   }, []);
+
+  function requestScanFromTab(
+    tabId: number,
+    onSnapshot: (snapshot: LatestScanSnapshot | null) => void,
+  ): void {
+    chrome.tabs.sendMessage(
+      tabId,
+      { type: GET_LATEST_SCAN_MESSAGE } satisfies JudolRuntimeMessage,
+      (response?: { snapshot?: LatestScanSnapshot | null }) => {
+        if (!chrome.runtime.lastError) {
+          onSnapshot(response?.snapshot ?? null);
+          return;
+        }
+
+        chrome.runtime.sendMessage(
+          {
+            type: ENSURE_CONTENT_SCRIPT_MESSAGE,
+            tabId,
+          } satisfies JudolRuntimeMessage,
+          (ensureResponse?: EnsureContentScriptResponse) => {
+            if (chrome.runtime.lastError || ensureResponse?.ok !== true) {
+              onSnapshot(null);
+              return;
+            }
+
+            window.setTimeout(() => {
+              chrome.tabs.sendMessage(
+                tabId,
+                { type: GET_LATEST_SCAN_MESSAGE } satisfies JudolRuntimeMessage,
+                (retryResponse?: { snapshot?: LatestScanSnapshot | null }) => {
+                  if (chrome.runtime.lastError) {
+                    onSnapshot(null);
+                    return;
+                  }
+
+                  onSnapshot(retryResponse?.snapshot ?? null);
+                },
+              );
+            }, 150);
+          },
+        );
+      },
+    );
+  }
 
   function handleBlurToggle(enabled: boolean): void {
     setBlurEnabled(enabled);

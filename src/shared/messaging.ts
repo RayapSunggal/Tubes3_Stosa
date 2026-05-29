@@ -5,6 +5,7 @@ export const BLUR_SETTING_STORAGE_KEY = "judolDetector.blurEnabled";
 export const DEFAULT_BLUR_ENABLED = true;
 export const GET_LATEST_SCAN_MESSAGE = "judolDetector.getLatestScan";
 export const SCAN_UPDATED_MESSAGE = "judolDetector.scanUpdated";
+export const ENSURE_CONTENT_SCRIPT_MESSAGE = "judolDetector.ensureContentScript";
 
 export interface LatestScanSnapshot {
   url: string;
@@ -22,4 +23,17 @@ export interface ScanUpdatedMessage {
   snapshot: LatestScanSnapshot;
 }
 
-export type JudolRuntimeMessage = GetLatestScanMessage | ScanUpdatedMessage;
+export interface EnsureContentScriptMessage {
+  type: typeof ENSURE_CONTENT_SCRIPT_MESSAGE;
+  tabId: number;
+}
+
+export interface EnsureContentScriptResponse {
+  ok: boolean;
+  error?: string;
+}
+
+export type JudolRuntimeMessage =
+  | GetLatestScanMessage
+  | ScanUpdatedMessage
+  | EnsureContentScriptMessage;

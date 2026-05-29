@@ -31,7 +31,14 @@ let scanTimeoutId: number | undefined;
 let blurEnabled = DEFAULT_BLUR_ENABLED;
 let latestScanSnapshot: LatestScanSnapshot | null = null;
 
-void bootstrapContentScript();
+const contentWindow = window as typeof window & {
+  __judolDetectorContentLoaded?: boolean;
+};
+
+if (!contentWindow.__judolDetectorContentLoaded) {
+  contentWindow.__judolDetectorContentLoaded = true;
+  void bootstrapContentScript();
+}
 
 async function bootstrapContentScript(): Promise<void> {
   await waitForBody();
