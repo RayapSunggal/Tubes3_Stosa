@@ -5,12 +5,16 @@ import { clearOcrState, scanImagesWithOcr } from "../content/ocrScanner";
 import { setupJudolTooltip } from "../content/tooltip";
 import { runFullDetector } from "../detector/fullDetector";
 import {
+  AHO_CORASICK_SETTING_STORAGE_KEY,
   BLUR_SETTING_STORAGE_KEY,
+  DEFAULT_AHO_CORASICK_ENABLED,
   DEFAULT_BLUR_ENABLED,
   DEFAULT_OCR_ENABLED,
+  DEFAULT_RABIN_KARP_ENABLED,
   GET_LATEST_SCAN_MESSAGE,
   LATEST_SCAN_STORAGE_KEY,
   OCR_SETTING_STORAGE_KEY,
+  RABIN_KARP_SETTING_STORAGE_KEY,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
@@ -34,6 +38,8 @@ let observer: MutationObserver | null = null;
 let scanTimeoutId: number | undefined;
 let blurEnabled = DEFAULT_BLUR_ENABLED;
 let ocrEnabled = DEFAULT_OCR_ENABLED;
+let ahoCorasickEnabled = DEFAULT_AHO_CORASICK_ENABLED;
+let rabinKarpEnabled = DEFAULT_RABIN_KARP_ENABLED;
 let latestScanSnapshot: LatestScanSnapshot | null = null;
 let isScanRunning = false;
 let rescanRequested = false;
@@ -71,9 +77,22 @@ async function bootstrapContentScript(): Promise<void> {
     }
 
     await waitForBody();
-    [blurEnabled, ocrEnabled] = await Promise.all([
+    [
+      blurEnabled,
+      ocrEnabled,
+      ahoCorasickEnabled,
+      rabinKarpEnabled,
+    ] = await Promise.all([
       loadBooleanSetting(BLUR_SETTING_STORAGE_KEY, DEFAULT_BLUR_ENABLED),
       loadBooleanSetting(OCR_SETTING_STORAGE_KEY, DEFAULT_OCR_ENABLED),
+      loadBooleanSetting(
+        AHO_CORASICK_SETTING_STORAGE_KEY,
+        DEFAULT_AHO_CORASICK_ENABLED,
+      ),
+      loadBooleanSetting(
+        RABIN_KARP_SETTING_STORAGE_KEY,
+        DEFAULT_RABIN_KARP_ENABLED,
+      ),
     ]);
     watchStoredSettings();
     setupRuntimeMessaging();
@@ -153,10 +172,11 @@ async function scanAndHighlight(): Promise<void> {
       Promise.resolve(scanDocumentText(document.body)),
     ]);
 
+    const detectorOptions = createDetectorOptions();
     const input: DetectorInput = {
       text: scan.text,
       keywords,
-      options: DEFAULT_OPTIONS,
+      options: detectorOptions,
     };
 
     const detectorOutput = runFullDetector(input);
@@ -165,7 +185,7 @@ async function scanAndHighlight(): Promise<void> {
     observerRestarted = true;
 
     const ocrOutput = ocrEnabled
-      ? await scanImagesWithOcr(document.body, keywords, DEFAULT_OPTIONS)
+      ? await scanImagesWithOcr(document.body, keywords, detectorOptions)
       : { stats: createEmptyOcrStats() };
 
     applyBlurToHighlights(blurEnabled);
@@ -216,23 +236,27 @@ function watchStoredSettings(): void {
       return;
     }
 
-    const change = changes[BLUR_SETTING_STORAGE_KEY];
-    if (!change || typeof change.newValue !== "boolean") {
-      const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
-      if (ocrChange && typeof ocrChange.newValue === "boolean") {
-        ocrEnabled = ocrChange.newValue;
-        scheduleScan(100);
-      }
-
-      return;
+    const blurChange = changes[BLUR_SETTING_STORAGE_KEY];
+    if (typeof blurChange?.newValue === "boolean") {
+      blurEnabled = blurChange.newValue;
+      applyBlurToHighlights(blurEnabled);
     }
 
-    blurEnabled = change.newValue;
-    applyBlurToHighlights(blurEnabled);
-
     const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
-    if (ocrChange && typeof ocrChange.newValue === "boolean") {
+    if (typeof ocrChange?.newValue === "boolean") {
       ocrEnabled = ocrChange.newValue;
+      scheduleScan(100);
+    }
+
+    const ahoCorasickChange = changes[AHO_CORASICK_SETTING_STORAGE_KEY];
+    if (typeof ahoCorasickChange?.newValue === "boolean") {
+      ahoCorasickEnabled = ahoCorasickChange.newValue;
+      scheduleScan(100);
+    }
+
+    const rabinKarpChange = changes[RABIN_KARP_SETTING_STORAGE_KEY];
+    if (typeof rabinKarpChange?.newValue === "boolean") {
+      rabinKarpEnabled = rabinKarpChange.newValue;
       scheduleScan(100);
     }
   };
@@ -242,6 +266,14 @@ function watchStoredSettings(): void {
   } catch (error) {
     handleExtensionContextError(error);
   }
+}
+
+function createDetectorOptions(): DetectorInput["options"] {
+  return {
+    ...DEFAULT_OPTIONS,
+    enableAhoCorasick: ahoCorasickEnabled,
+    enableRabinKarp: rabinKarpEnabled,
+  };
 }
 
 function setupRuntimeMessaging(): void {

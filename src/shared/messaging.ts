@@ -3,8 +3,14 @@ import type { DetectorStats } from "./types";
 export const LATEST_SCAN_STORAGE_KEY = "judolDetector.latestScan";
 export const BLUR_SETTING_STORAGE_KEY = "judolDetector.blurEnabled";
 export const OCR_SETTING_STORAGE_KEY = "judolDetector.ocrEnabled";
+export const AHO_CORASICK_SETTING_STORAGE_KEY =
+  "judolDetector.ahoCorasickEnabled";
+export const RABIN_KARP_SETTING_STORAGE_KEY =
+  "judolDetector.rabinKarpEnabled";
 export const DEFAULT_BLUR_ENABLED = true;
 export const DEFAULT_OCR_ENABLED = true;
+export const DEFAULT_AHO_CORASICK_ENABLED = true;
+export const DEFAULT_RABIN_KARP_ENABLED = true;
 export const GET_LATEST_SCAN_MESSAGE = "judolDetector.getLatestScan";
 export const SCAN_UPDATED_MESSAGE = "judolDetector.scanUpdated";
 export const FETCH_IMAGE_MESSAGE = "judolDetector.fetchImage";

@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AHO_CORASICK_SETTING_STORAGE_KEY,
   BLUR_SETTING_STORAGE_KEY,
+  DEFAULT_AHO_CORASICK_ENABLED,
   DEFAULT_BLUR_ENABLED,
   DEFAULT_OCR_ENABLED,
+  DEFAULT_RABIN_KARP_ENABLED,
   GET_LATEST_SCAN_MESSAGE,
   OCR_SETTING_STORAGE_KEY,
+  RABIN_KARP_SETTING_STORAGE_KEY,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
@@ -75,6 +79,12 @@ const algorithmTones: Record<
 export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
   const [ocrEnabled, setOcrEnabled] = useState(DEFAULT_OCR_ENABLED);
+  const [ahoCorasickEnabled, setAhoCorasickEnabled] = useState(
+    DEFAULT_AHO_CORASICK_ENABLED,
+  );
+  const [rabinKarpEnabled, setRabinKarpEnabled] = useState(
+    DEFAULT_RABIN_KARP_ENABLED,
+  );
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
   const [currentPageLabel, setCurrentPageLabel] = useState("Halaman aktif");
   const [scanStatus, setScanStatus] = useState<ScanStatus>("connecting");
@@ -96,10 +106,17 @@ export function Popup() {
     }
 
     chrome.storage.local.get(
-      [BLUR_SETTING_STORAGE_KEY, OCR_SETTING_STORAGE_KEY],
+      [
+        BLUR_SETTING_STORAGE_KEY,
+        OCR_SETTING_STORAGE_KEY,
+        AHO_CORASICK_SETTING_STORAGE_KEY,
+        RABIN_KARP_SETTING_STORAGE_KEY,
+      ],
       (result) => {
         const blurValue = result[BLUR_SETTING_STORAGE_KEY];
         const ocrValue = result[OCR_SETTING_STORAGE_KEY];
+        const ahoCorasickValue = result[AHO_CORASICK_SETTING_STORAGE_KEY];
+        const rabinKarpValue = result[RABIN_KARP_SETTING_STORAGE_KEY];
 
         if (typeof blurValue === "boolean") {
           setBlurEnabled(blurValue);
@@ -107,6 +124,14 @@ export function Popup() {
 
         if (typeof ocrValue === "boolean") {
           setOcrEnabled(ocrValue);
+        }
+
+        if (typeof ahoCorasickValue === "boolean") {
+          setAhoCorasickEnabled(ahoCorasickValue);
+        }
+
+        if (typeof rabinKarpValue === "boolean") {
+          setRabinKarpEnabled(rabinKarpValue);
         }
       },
     );
@@ -127,6 +152,16 @@ export function Popup() {
       const ocrChange = changes[OCR_SETTING_STORAGE_KEY];
       if (typeof ocrChange?.newValue === "boolean") {
         setOcrEnabled(ocrChange.newValue);
+      }
+
+      const ahoCorasickChange = changes[AHO_CORASICK_SETTING_STORAGE_KEY];
+      if (typeof ahoCorasickChange?.newValue === "boolean") {
+        setAhoCorasickEnabled(ahoCorasickChange.newValue);
+      }
+
+      const rabinKarpChange = changes[RABIN_KARP_SETTING_STORAGE_KEY];
+      if (typeof rabinKarpChange?.newValue === "boolean") {
+        setRabinKarpEnabled(rabinKarpChange.newValue);
       }
     };
 
@@ -282,6 +317,30 @@ export function Popup() {
     });
   }
 
+  function handleAhoCorasickToggle(enabled: boolean): void {
+    setAhoCorasickEnabled(enabled);
+
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      return;
+    }
+
+    void chrome.storage.local.set({
+      [AHO_CORASICK_SETTING_STORAGE_KEY]: enabled,
+    });
+  }
+
+  function handleRabinKarpToggle(enabled: boolean): void {
+    setRabinKarpEnabled(enabled);
+
+    if (typeof chrome === "undefined" || !chrome.storage?.local) {
+      return;
+    }
+
+    void chrome.storage.local.set({
+      [RABIN_KARP_SETTING_STORAGE_KEY]: enabled,
+    });
+  }
+
   return (
     <main className="popup">
       <header className="popup-header">
@@ -335,8 +394,8 @@ export function Popup() {
       <section className="section bonus-section" aria-labelledby="bonus-title">
         <div className="section-heading">
           <div>
-            <p className="section-kicker">Bonus</p>
-            <h2 id="bonus-title">Proteksi visual</h2>
+            <p className="section-kicker">Kontrol</p>
+            <h2 id="bonus-title">Fitur scan</h2>
           </div>
         </div>
 
@@ -362,6 +421,34 @@ export function Popup() {
               type="checkbox"
               checked={ocrEnabled}
               onChange={(event) => handleOcrToggle(event.currentTarget.checked)}
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span>
+              <strong>Aho-Corasick</strong>
+              <small>Aktifkan matching multi-keyword.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={ahoCorasickEnabled}
+              onChange={(event) =>
+                handleAhoCorasickToggle(event.currentTarget.checked)
+              }
+            />
+          </label>
+
+          <label className="toggle-row">
+            <span>
+              <strong>Rabin-Karp</strong>
+              <small>Aktifkan matching berbasis rolling hash.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={rabinKarpEnabled}
+              onChange={(event) =>
+                handleRabinKarpToggle(event.currentTarget.checked)
+              }
             />
           </label>
         </div>
