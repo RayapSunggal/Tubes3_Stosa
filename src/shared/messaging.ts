@@ -12,6 +12,7 @@ export const DEFAULT_OCR_ENABLED = true;
 export const DEFAULT_AHO_CORASICK_ENABLED = true;
 export const DEFAULT_RABIN_KARP_ENABLED = true;
 export const GET_LATEST_SCAN_MESSAGE = "judolDetector.getLatestScan";
+export const SCAN_PROGRESS_MESSAGE = "judolDetector.scanProgress";
 export const SCAN_UPDATED_MESSAGE = "judolDetector.scanUpdated";
 export const FETCH_IMAGE_MESSAGE = "judolDetector.fetchImage";
 
@@ -31,6 +32,9 @@ export interface LatestScanSnapshot {
   scannedAt: number;
   stats: DetectorStats;
   ocrStats?: OcrStats;
+  isScanning?: boolean;
+  scanStartedAt?: number;
+  progressLabel?: string;
 }
 
 export interface GetLatestScanMessage {
@@ -39,6 +43,11 @@ export interface GetLatestScanMessage {
 
 export interface ScanUpdatedMessage {
   type: typeof SCAN_UPDATED_MESSAGE;
+  snapshot: LatestScanSnapshot;
+}
+
+export interface ScanProgressMessage {
+  type: typeof SCAN_PROGRESS_MESSAGE;
   snapshot: LatestScanSnapshot;
 }
 
@@ -64,5 +73,6 @@ export type FetchImageResponse =
 
 export type JudolRuntimeMessage =
   | GetLatestScanMessage
+  | ScanProgressMessage
   | ScanUpdatedMessage
   | FetchImageMessage;

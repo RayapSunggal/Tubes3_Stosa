@@ -37,6 +37,8 @@ export interface OcrScanOutput {
   stats: OcrStats;
 }
 
+type OcrProgressCallback = (stats: OcrStats) => void;
+
 let workerPromise: Promise<Tesseract.Worker> | null = null;
 const ocrTextCache = new Map<string, Promise<CachedOcrText>>();
 
@@ -44,6 +46,7 @@ export async function scanImagesWithOcr(
   root: ParentNode,
   keywords: string[],
   options: DetectorOptions,
+  onProgress?: OcrProgressCallback,
 ): Promise<OcrScanOutput> {
   const startedAt = now();
   const candidates = collectReadableImages(root);
@@ -58,10 +61,12 @@ export async function scanImagesWithOcr(
   };
 
   if (candidates.length === 0) {
+    onProgress?.(cloneOcrStats(stats));
     return { stats };
   }
 
   injectOcrStyle();
+  onProgress?.(cloneOcrStats(stats));
 
   for (const image of candidates) {
     try {
@@ -94,11 +99,21 @@ export async function scanImagesWithOcr(
     } catch (error) {
       stats.errorCount += 1;
       console.debug("[Judol Detector] OCR skipped image", error);
+    } finally {
+      stats.executionTimeMs = now() - startedAt;
+      onProgress?.(cloneOcrStats(stats));
     }
   }
 
   stats.executionTimeMs = now() - startedAt;
   return { stats };
+}
+
+function cloneOcrStats(stats: OcrStats): OcrStats {
+  return {
+    ...stats,
+    keywordCounts: { ...stats.keywordCounts },
+  };
 }
 
 export function clearOcrState(root: ParentNode = document): void {

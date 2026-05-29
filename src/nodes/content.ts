@@ -15,12 +15,18 @@ import {
   LATEST_SCAN_STORAGE_KEY,
   OCR_SETTING_STORAGE_KEY,
   RABIN_KARP_SETTING_STORAGE_KEY,
+  SCAN_PROGRESS_MESSAGE,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
   type OcrStats,
 } from "../shared/messaging";
-import type { DetectorInput, DetectorOutput } from "../shared/types";
+import type {
+  AlgorithmName,
+  DetectorInput,
+  DetectorOutput,
+  DetectorStats,
+} from "../shared/types";
 
 const DEFAULT_OPTIONS = {
   enableKMP: true,
@@ -32,6 +38,14 @@ const DEFAULT_OPTIONS = {
   fuzzyThreshold: 0.82,
   normalizeText: true,
 };
+const ALGORITHM_ORDER: AlgorithmName[] = [
+  "KMP",
+  "BoyerMoore",
+  "AhoCorasick",
+  "RabinKarp",
+  "RegEx",
+  "WeightedLevenshtein",
+];
 
 let keywordsPromise: Promise<string[]> | null = null;
 let observer: MutationObserver | null = null;
@@ -159,6 +173,9 @@ async function scanAndHighlight(): Promise<void> {
   }
 
   isScanRunning = true;
+  const scanStartedAt = Date.now();
+  let detectorOutput: DetectorOutput | null = null;
+  let ocrStats = createEmptyOcrStats();
   let observerRestarted = false;
   observer?.disconnect();
 
@@ -166,11 +183,23 @@ async function scanAndHighlight(): Promise<void> {
     clearBlurState();
     clearOcrState();
     clearHighlights();
+    publishScanProgress(
+      createEmptyDetectorStats(),
+      ocrStats,
+      scanStartedAt,
+      "Menyiapkan scan",
+    );
 
     const [keywords, scan] = await Promise.all([
       loadKeywords(),
       Promise.resolve(scanDocumentText(document.body)),
     ]);
+    publishScanProgress(
+      createEmptyDetectorStats(),
+      ocrStats,
+      scanStartedAt,
+      "Memindai DOM",
+    );
 
     const detectorOptions = createDetectorOptions();
     const input: DetectorInput = {
@@ -179,17 +208,37 @@ async function scanAndHighlight(): Promise<void> {
       options: detectorOptions,
     };
 
-    const detectorOutput = runFullDetector(input);
+    detectorOutput = runFullDetector(input);
+    publishScanProgress(
+      detectorOutput.stats,
+      ocrStats,
+      scanStartedAt,
+      "Menyorot hasil DOM",
+    );
     const highlightedCount = highlightDetectorMatches(scan, detectorOutput);
     startObserver();
     observerRestarted = true;
 
     const ocrOutput = ocrEnabled
-      ? await scanImagesWithOcr(document.body, keywords, detectorOptions)
+      ? await scanImagesWithOcr(
+          document.body,
+          keywords,
+          detectorOptions,
+          (progressStats) => {
+            ocrStats = progressStats;
+            publishScanProgress(
+              detectorOutput?.stats ?? createEmptyDetectorStats(),
+              ocrStats,
+              scanStartedAt,
+              "Memindai gambar OCR",
+            );
+          },
+        )
       : { stats: createEmptyOcrStats() };
 
+    ocrStats = ocrOutput.stats;
     applyBlurToHighlights(blurEnabled);
-    storeLatestScan(detectorOutput, ocrOutput.stats);
+    storeLatestScan(detectorOutput, ocrStats, scanStartedAt);
 
     console.info("[Judol Detector] scan complete", {
       detectorMatches: detectorOutput.matches.length,
@@ -297,18 +346,39 @@ function setupRuntimeMessaging(): void {
   }
 }
 
-function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
+function publishScanProgress(
+  stats: DetectorStats,
+  ocrStats: OcrStats,
+  scanStartedAt: number,
+  progressLabel: string,
+): void {
   if (!isExtensionContextAvailable()) {
     return;
   }
 
-  const snapshot: LatestScanSnapshot = {
-    url: window.location.href,
-    title: document.title,
-    scannedAt: Date.now(),
-    stats: output.stats,
-    ocrStats,
-  };
+  const snapshot = createScanSnapshot(stats, ocrStats, {
+    isScanning: true,
+    scanStartedAt,
+    progressLabel,
+  });
+  latestScanSnapshot = snapshot;
+  sendScanMessage(SCAN_PROGRESS_MESSAGE, snapshot);
+}
+
+function storeLatestScan(
+  output: DetectorOutput,
+  ocrStats: OcrStats,
+  scanStartedAt: number,
+): void {
+  if (!isExtensionContextAvailable()) {
+    return;
+  }
+
+  const snapshot = createScanSnapshot(output.stats, ocrStats, {
+    isScanning: false,
+    scanStartedAt,
+    progressLabel: "Scan selesai",
+  });
 
   latestScanSnapshot = snapshot;
 
@@ -319,9 +389,38 @@ function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
       });
     }
 
+    sendScanMessage(SCAN_UPDATED_MESSAGE, snapshot);
+  } catch (error) {
+    handleExtensionContextError(error);
+  }
+}
+
+function createScanSnapshot(
+  stats: DetectorStats,
+  ocrStats: OcrStats,
+  progress: Pick<
+    LatestScanSnapshot,
+    "isScanning" | "scanStartedAt" | "progressLabel"
+  >,
+): LatestScanSnapshot {
+  return {
+    url: window.location.href,
+    title: document.title,
+    scannedAt: Date.now(),
+    stats,
+    ocrStats,
+    ...progress,
+  };
+}
+
+function sendScanMessage(
+  type: typeof SCAN_PROGRESS_MESSAGE | typeof SCAN_UPDATED_MESSAGE,
+  snapshot: LatestScanSnapshot,
+): void {
+  try {
     chrome.runtime.sendMessage(
       {
-        type: SCAN_UPDATED_MESSAGE,
+        type,
         snapshot,
       } satisfies JudolRuntimeMessage,
       () => {
@@ -331,6 +430,25 @@ function storeLatestScan(output: DetectorOutput, ocrStats: OcrStats): void {
   } catch (error) {
     handleExtensionContextError(error);
   }
+}
+
+function createEmptyDetectorStats(): DetectorStats {
+  return {
+    totalRawMatches: 0,
+    totalMergedMatches: 0,
+    keywordCounts: {},
+    matchKindCounts: {
+      exact: 0,
+      regex: 0,
+      fuzzy: 0,
+    },
+    algorithmStats: ALGORITHM_ORDER.map((algorithm) => ({
+      algorithm,
+      matchCount: 0,
+      executionTimeMs: 0,
+      comparisons: 0,
+    })),
+  };
 }
 
 function createEmptyOcrStats(): OcrStats {

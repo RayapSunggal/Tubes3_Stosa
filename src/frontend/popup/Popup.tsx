@@ -9,6 +9,7 @@ import {
   GET_LATEST_SCAN_MESSAGE,
   OCR_SETTING_STORAGE_KEY,
   RABIN_KARP_SETTING_STORAGE_KEY,
+  SCAN_PROGRESS_MESSAGE,
   SCAN_UPDATED_MESSAGE,
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
@@ -38,7 +39,12 @@ interface PopupStatsView {
   }>;
 }
 
-type ScanStatus = "connecting" | "active" | "waiting" | "unavailable";
+type ScanStatus =
+  | "connecting"
+  | "active"
+  | "scanning"
+  | "waiting"
+  | "unavailable";
 
 const emptyStats: PopupStatsView = {
   scannedNodes: 0,
@@ -88,9 +94,10 @@ export function Popup() {
   const [latestScan, setLatestScan] = useState<LatestScanSnapshot | null>(null);
   const [currentPageLabel, setCurrentPageLabel] = useState("Halaman aktif");
   const [scanStatus, setScanStatus] = useState<ScanStatus>("connecting");
+  const [scanClock, setScanClock] = useState(() => Date.now());
   const activeStats = useMemo(
-    () => (latestScan ? createStatsView(latestScan) : emptyStats),
-    [latestScan],
+    () => (latestScan ? createStatsView(latestScan, scanClock) : emptyStats),
+    [latestScan, scanClock],
   );
 
   const kindTotal = useMemo(
@@ -99,6 +106,15 @@ export function Popup() {
   );
   const statusLabel = getStatusLabel(scanStatus);
   const footerStatusLabel = getFooterStatusLabel(scanStatus, latestScan);
+
+  useEffect(() => {
+    if (!latestScan?.isScanning) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => setScanClock(Date.now()), 120);
+    return () => window.clearInterval(timerId);
+  }, [latestScan?.isScanning]);
 
   useEffect(() => {
     if (typeof chrome === "undefined" || !chrome.storage?.local) {
@@ -248,7 +264,9 @@ export function Popup() {
 
             const snapshot = response?.snapshot ?? null;
             setLatestScan(snapshot);
-            setScanStatus(snapshot ? "active" : "waiting");
+            setScanStatus(
+              snapshot?.isScanning ? "scanning" : snapshot ? "active" : "waiting",
+            );
           },
         );
       });
@@ -259,14 +277,15 @@ export function Popup() {
       sender: chrome.runtime.MessageSender,
     ) => {
       if (
-        message?.type !== SCAN_UPDATED_MESSAGE ||
+        (message?.type !== SCAN_PROGRESS_MESSAGE &&
+          message?.type !== SCAN_UPDATED_MESSAGE) ||
         sender.tab?.id !== activeTabId
       ) {
         return;
       }
 
       setLatestScan(message.snapshot);
-      setScanStatus("active");
+      setScanStatus(message.snapshot.isScanning ? "scanning" : "active");
       setCurrentPageLabel(message.snapshot.title || message.snapshot.url);
     };
 
@@ -475,6 +494,8 @@ function getStatusLabel(status: ScanStatus): string {
   switch (status) {
     case "active":
       return "Aktif";
+    case "scanning":
+      return "Scanning";
     case "waiting":
       return "Scan";
     case "unavailable":
@@ -492,6 +513,10 @@ function getFooterStatusLabel(
     return "Realtime";
   }
 
+  if (status === "scanning" && snapshot?.progressLabel) {
+    return snapshot.progressLabel;
+  }
+
   switch (status) {
     case "waiting":
       return "Menunggu hasil";
@@ -502,7 +527,10 @@ function getFooterStatusLabel(
   }
 }
 
-function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
+function createStatsView(
+  snapshot: LatestScanSnapshot,
+  currentTimeMs: number,
+): PopupStatsView {
   const stats = snapshot.stats;
   const ocrStats = snapshot.ocrStats;
   const keywordCounts = mergeKeywordCounts(
@@ -512,10 +540,17 @@ function createStatsView(snapshot: LatestScanSnapshot): PopupStatsView {
   const keywordEntries = Object.entries(keywordCounts)
     .sort((left, right) => right[1] - left[1])
     .slice(0, 5);
-  const totalExecutionTime = stats.algorithmStats.reduce(
+  const measuredExecutionTime = stats.algorithmStats.reduce(
     (total, item) => total + item.executionTimeMs,
     0,
   ) + (ocrStats?.executionTimeMs ?? 0);
+  const liveExecutionTime =
+    snapshot.isScanning && typeof snapshot.scanStartedAt === "number"
+      ? Math.max(0, currentTimeMs - snapshot.scanStartedAt)
+      : 0;
+  const totalExecutionTime = snapshot.isScanning
+    ? Math.max(measuredExecutionTime, liveExecutionTime)
+    : measuredExecutionTime;
   const ocrMatchCount = ocrStats?.matchCount ?? 0;
 
   return {
