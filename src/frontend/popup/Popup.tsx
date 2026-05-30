@@ -538,8 +538,7 @@ function createStatsView(
     ocrStats?.keywordCounts ?? {},
   );
   const keywordEntries = Object.entries(keywordCounts)
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 5);
+    .sort((left, right) => right[1] - left[1]);
   const measuredExecutionTime = stats.algorithmStats.reduce(
     (total, item) => total + item.executionTimeMs,
     0,

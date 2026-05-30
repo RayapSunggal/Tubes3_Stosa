@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 interface KeywordDatum {
   keyword: string;
   count: number;
@@ -9,8 +11,11 @@ interface ChartPanelProps {
 }
 
 export function ChartPanel({ keywords }: ChartPanelProps) {
+  const [showAll, setShowAll] = useState(false);
+  const displayedKeywords = showAll ? keywords : keywords.slice(0, 5);
   const maxCount = keywords.reduce((max, item) => Math.max(max, item.count), 1);
   const visibleKeywordCount = keywords.filter((item) => item.count > 0).length;
+  const canToggle = keywords.length > 5;
 
   return (
     <section className="section" aria-labelledby="keyword-chart-title">
@@ -23,7 +28,7 @@ export function ChartPanel({ keywords }: ChartPanelProps) {
       </div>
 
       <div className="keyword-chart" aria-label="Perbandingan jumlah keyword">
-        {keywords.map((item) => {
+        {displayedKeywords.map((item) => {
           const width = `${Math.max((item.count / maxCount) * 100, 8)}%`;
 
           return (
@@ -40,6 +45,16 @@ export function ChartPanel({ keywords }: ChartPanelProps) {
           );
         })}
       </div>
+
+      {canToggle ? (
+        <button
+          className="chart-toggle"
+          type="button"
+          onClick={() => setShowAll((current) => !current)}
+        >
+          {showAll ? "Tampilkan top 5" : "Tampilkan semua"}
+        </button>
+      ) : null}
     </section>
   );
 }

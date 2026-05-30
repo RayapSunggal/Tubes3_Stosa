@@ -1,6 +1,6 @@
 import type { DetectorOutput, MergedMatch } from "../shared/types";
 import type { DomScanResult, TextSegment } from "./domScanner";
-import { attachTooltipData } from "./tooltip";
+import { attachTooltipData, type TooltipPayload } from "./tooltip";
 
 interface HighlightSegment {
   match: MergedMatch;
@@ -36,9 +36,6 @@ export function highlightDetectorMatches(
 
     const algorithms = segment.match.algorithms;
     const keyword = segment.match.keywords.join(", ");
-    const executionTimeMs = output.stats.algorithmStats
-      .filter((item) => algorithms.some((algorithm) => algorithm === item.algorithm))
-      .reduce((total, item) => total + item.executionTimeMs, 0);
     const count = segment.match.keywords.reduce(
       (total, item) => total + (output.stats.keywordCounts[item] ?? 1),
       0,
@@ -48,7 +45,7 @@ export function highlightDetectorMatches(
       keyword,
       algorithm: algorithms.join(", "),
       count,
-      executionTimeMs,
+      algorithmTimes: getAlgorithmTimes(output, segment.match),
       matchedText: segment.match.matchedText,
     });
 
@@ -56,6 +53,35 @@ export function highlightDetectorMatches(
   }
 
   return highlightedCount;
+}
+
+function getAlgorithmTimes(
+  output: DetectorOutput,
+  match: MergedMatch,
+): TooltipPayload["algorithmTimes"] {
+  return output.stats.algorithmStats
+    .filter((item) =>
+      match.algorithms.some((algorithm) => algorithm === item.algorithm),
+    )
+    .map((item) => ({
+      label: formatAlgorithmName(item.algorithm),
+      timeMs: item.executionTimeMs,
+    }));
+}
+
+function formatAlgorithmName(algorithm: string): string {
+  switch (algorithm) {
+    case "BoyerMoore":
+      return "Boyer Moore";
+    case "WeightedLevenshtein":
+      return "Weighted Levenshtein";
+    case "AhoCorasick":
+      return "Aho-Corasick";
+    case "RabinKarp":
+      return "Rabin-Karp";
+    default:
+      return algorithm;
+  }
 }
 
 export function clearHighlights(root: ParentNode = document): void {
