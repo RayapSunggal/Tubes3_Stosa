@@ -292,7 +292,7 @@ dist/
 | Student ID | Name |
 |------------|------|
 | 13524010 | Audric Yusuf Maynard Simatupang |
-| 13424052 | Raynard Fausta |
+| 13524052 | Raynard Fausta |
 | 13524117 | Rainaldi Pratama F. Sembiring |
 
 ---
