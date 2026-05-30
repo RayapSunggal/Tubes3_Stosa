@@ -92,7 +92,7 @@ export async function scanImagesWithOcr(
       }
 
       stats.matchedImageCount += 1;
-      stats.matchCount += detectorOutput.matches.length;
+      stats.matchCount += detectorOutput.stats.totalMergedMatches;
       addKeywordCounts(stats.keywordCounts, detectorOutput.stats.keywordCounts);
       markImageMatch({
         image,

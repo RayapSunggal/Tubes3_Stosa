@@ -449,8 +449,17 @@ function countKeywords(matches: MergedMatch[]): Record<string, number> {
   const counts: Record<string, number> = {};
 
   for (const match of matches) {
-    for (const keyword of match.keywords) {
-      counts[keyword] = (counts[keyword] ?? 0) + 1;
+    const seen: string[] = [];
+
+    for (const contribution of match.contributions) {
+      const kind = getContributionMatchKind(contribution);
+      const key = `${kind}\u0000${contribution.keyword}\u0000${contribution.matchedText}`;
+      if (hasSeenKey(seen, key)) {
+        continue;
+      }
+
+      seen.push(key);
+      counts[contribution.keyword] = (counts[contribution.keyword] ?? 0) + 1;
     }
   }
 
