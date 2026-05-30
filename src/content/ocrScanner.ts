@@ -369,7 +369,7 @@ function markImageMatch(match: OcrImageMatch): void {
   attachTooltipData(image, {
     keyword: keywords.join(", "),
     algorithm: `OCR, ${algorithms.join(", ")}`,
-    count: detectorOutput.matches.length,
+    count: detectorOutput.stats.totalMergedMatches,
     algorithmTimes: [
       { label: "OCR", timeMs: ocrExecutionTimeMs },
       ...getDetectorAlgorithmTimes(detectorOutput, algorithms),
