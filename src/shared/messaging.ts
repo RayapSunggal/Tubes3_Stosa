@@ -15,6 +15,9 @@ export const GET_LATEST_SCAN_MESSAGE = "judolDetector.getLatestScan";
 export const SCAN_PROGRESS_MESSAGE = "judolDetector.scanProgress";
 export const SCAN_UPDATED_MESSAGE = "judolDetector.scanUpdated";
 export const FETCH_IMAGE_MESSAGE = "judolDetector.fetchImage";
+export const RECOGNIZE_IMAGE_MESSAGE = "judolDetector.recognizeImage";
+export const OFFSCREEN_RECOGNIZE_IMAGE_MESSAGE =
+  "judolDetector.offscreenRecognizeImage";
 
 export interface OcrStats {
   candidateImageCount: number;
@@ -56,6 +59,17 @@ export interface FetchImageMessage {
   url: string;
 }
 
+export interface RecognizeImageMessage {
+  type: typeof RECOGNIZE_IMAGE_MESSAGE;
+  url?: string;
+  dataUrl?: string;
+}
+
+export interface OffscreenRecognizeImageMessage {
+  type: typeof OFFSCREEN_RECOGNIZE_IMAGE_MESSAGE;
+  dataUrl: string;
+}
+
 export interface FetchImageSuccessResponse {
   ok: true;
   contentType: string;
@@ -71,8 +85,25 @@ export type FetchImageResponse =
   | FetchImageSuccessResponse
   | FetchImageErrorResponse;
 
+export interface RecognizeImageSuccessResponse {
+  ok: true;
+  text: string;
+  executionTimeMs: number;
+}
+
+export interface RecognizeImageErrorResponse {
+  ok: false;
+  error: string;
+}
+
+export type RecognizeImageResponse =
+  | RecognizeImageSuccessResponse
+  | RecognizeImageErrorResponse;
+
 export type JudolRuntimeMessage =
   | GetLatestScanMessage
   | ScanProgressMessage
   | ScanUpdatedMessage
-  | FetchImageMessage;
+  | FetchImageMessage
+  | RecognizeImageMessage
+  | OffscreenRecognizeImageMessage;
