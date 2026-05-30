@@ -1,13 +1,13 @@
-import type { DetectorInput, RawMatch } from "../shared/types";
+import type { AlgorithmMatchResult, DetectorInput, RawMatch } from "../shared/types";
 
 const BASE=256;
 const MOD=1000000007;
 
-function rabinKarp(text: string, pattern: string, keyword: string): RawMatch[] {
+function rabinKarp(text: string, pattern: string, keyword: string): AlgorithmMatchResult {
   const matches: RawMatch[]=[];
   const n=text.length;
   const m=pattern.length;
-  if (m===0 || n<m) return matches;
+  if (m===0 || n<m) return withComparisons(matches, 0);
 
   const data=text.toLowerCase();
   const target=pattern.toLowerCase();
@@ -56,16 +56,26 @@ function rabinKarp(text: string, pattern: string, keyword: string): RawMatch[] {
     }
   }
 
-  return matches;
+  return withComparisons(matches, ni);
 }
 
-export function runRabinKarp(input: DetectorInput): RawMatch[] {
+function withComparisons(matches: RawMatch[], comparisons: number): AlgorithmMatchResult {
+  const result=matches as AlgorithmMatchResult;
+  result.comparisons=comparisons;
+
+  return result;
+}
+
+export function runRabinKarp(input: DetectorInput): AlgorithmMatchResult {
   const { text, keywords }=input;
   const results: RawMatch[]=[];
+  let comparisons=0;
 
   for (const keyword of keywords) {
-    results.push(...rabinKarp(text, keyword, keyword));
+    const matches=rabinKarp(text, keyword, keyword);
+    comparisons+=matches.comparisons;
+    results.push(...matches);
   }
 
-  return results;
+  return withComparisons(results, comparisons);
 }

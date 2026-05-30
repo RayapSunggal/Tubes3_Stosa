@@ -1,4 +1,4 @@
-import type { DetectorInput, RawMatch } from "../shared/types";
+import type { AlgorithmMatchResult, DetectorInput, RawMatch } from "../shared/types";
 
 interface AhoPattern {
   target: string;
@@ -65,7 +65,7 @@ function buildTrie(patterns: AhoPattern[]): AhoNode {
   return root;
 }
 
-function ahoCorasick(text: string, keywords: string[]): RawMatch[] {
+function ahoCorasick(text: string, keywords: string[]): AlgorithmMatchResult {
   const patterns: AhoPattern[]=keywords
     .filter((keyword) => keyword.length>0)
     .map((keyword) => ({
@@ -73,7 +73,7 @@ function ahoCorasick(text: string, keywords: string[]): RawMatch[] {
       keyword,
     }));
   const matches: RawMatch[]=[];
-  if (patterns.length===0 || text.length===0) return matches;
+  if (patterns.length===0 || text.length===0) return withComparisons(matches, 0);
 
   const root=buildTrie(patterns);
   const data=text.toLowerCase();
@@ -106,10 +106,17 @@ function ahoCorasick(text: string, keywords: string[]): RawMatch[] {
     }
   }
 
-  return matches;
+  return withComparisons(matches, ni);
 }
 
-export function runAhoCorasick(input: DetectorInput): RawMatch[] {
+function withComparisons(matches: RawMatch[], comparisons: number): AlgorithmMatchResult {
+  const result=matches as AlgorithmMatchResult;
+  result.comparisons=comparisons;
+
+  return result;
+}
+
+export function runAhoCorasick(input: DetectorInput): AlgorithmMatchResult {
   const { text, keywords }=input;
 
   return ahoCorasick(text, keywords);

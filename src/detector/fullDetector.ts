@@ -5,6 +5,7 @@ import { runRabinKarp } from "../algorithms/rabinKarp";
 import { runRegexMatcher } from "../algorithms/regexMatcher";
 import { runWeightedLevenshtein } from "../algorithms/weightedLevenshtein";
 import type {
+  AlgorithmMatchResult,
   AlgorithmExecutionStats,
   AlgorithmName,
   DetectorInput,
@@ -145,14 +146,14 @@ function createDetectorOutput(
   );
 
   return {
-    rawMatches,
-    matches,
-    stats: {
-      totalRawMatches: rawMatches.length,
-      totalMergedMatches: matches.length,
-      keywordCounts: countKeywords(matches),
-      matchKindCounts: countMatchKinds(matches),
-      algorithmStats,
+      rawMatches,
+      matches,
+      stats: {
+        totalRawMatches: rawMatches.length,
+        totalMergedMatches: countDetections(matches),
+        keywordCounts: countKeywords(matches),
+        matchKindCounts: countMatchKinds(matches),
+        algorithmStats,
     },
   };
 }
@@ -196,36 +197,40 @@ function createExactAlgorithmConfigs(input: DetectorInput): RunnerConfig[] {
       enabled: input.options.enableKMP,
       runner: runKmp,
       input,
-      filterBoundaries: true,
+      filterBoundaries: false,
     },
     {
       algorithm: "BoyerMoore",
       enabled: input.options.enableBoyerMoore,
       runner: runBoyerMoore,
       input,
-      filterBoundaries: true,
+      filterBoundaries: false,
     },
     {
       algorithm: "AhoCorasick",
       enabled: input.options.enableAhoCorasick === true,
       runner: runAhoCorasick,
       input,
-      filterBoundaries: true,
+      filterBoundaries: false,
     },
     {
       algorithm: "RabinKarp",
       enabled: input.options.enableRabinKarp === true,
       runner: runRabinKarp,
       input,
-      filterBoundaries: true,
+      filterBoundaries: false,
     },
   ];
 }
 
 function runConfiguredAlgorithm(config: RunnerConfig): RunResult {
   const startedAt = now();
+  const rawMatches = config.enabled
+    ? config.runner(config.input)
+    : [];
+  const comparisons = getComparisonCount(rawMatches);
   const matches = config.enabled
-    ? sanitizeMatches(config.input.text, config.runner(config.input), config.filterBoundaries)
+    ? sanitizeMatches(config.input.text, rawMatches, config.filterBoundaries)
     : [];
   const executionTimeMs = now() - startedAt;
 
@@ -235,12 +240,21 @@ function runConfiguredAlgorithm(config: RunnerConfig): RunResult {
       algorithm: config.algorithm,
       matchCount: matches.length,
       executionTimeMs,
-      comparisons: matches.reduce(
-        (total, match) => total + (match.comparisons ?? 0),
-        0,
-      ),
+      comparisons,
     },
   };
+}
+
+function getComparisonCount(matches: RawMatch[]): number {
+  const comparisonResult = matches as Partial<AlgorithmMatchResult>;
+  if (typeof comparisonResult.comparisons === "number") {
+    return comparisonResult.comparisons;
+  }
+
+  return matches.reduce(
+    (total, match) => total + (match.comparisons ?? 0),
+    0,
+  );
 }
 
 function sanitizeMatches(
@@ -320,8 +334,16 @@ function syncAlgorithmMatchCounts(
   const counts: Partial<Record<AlgorithmName, number>> = {};
 
   for (const match of matches) {
-    for (const algorithm of match.algorithms) {
-      counts[algorithm] = (counts[algorithm] ?? 0) + 1;
+    const seen: string[] = [];
+
+    for (const contribution of match.contributions) {
+      const key = `${contribution.algorithm}\u0000${contribution.keyword}\u0000${contribution.matchedText}`;
+      if (hasSeenKey(seen, key)) {
+        continue;
+      }
+
+      seen.push(key);
+      counts[contribution.algorithm] = (counts[contribution.algorithm] ?? 0) + 1;
     }
   }
 
@@ -442,12 +464,45 @@ function countMatchKinds(matches: MergedMatch[]): Record<MatchKind, number> {
   };
 
   for (const match of matches) {
-    for (const kind of match.matchKinds) {
+    const seen: string[] = [];
+
+    for (const contribution of match.contributions) {
+      const kind = getContributionMatchKind(contribution);
+      const key = `${kind}\u0000${contribution.keyword}\u0000${contribution.matchedText}`;
+      if (hasSeenKey(seen, key)) {
+        continue;
+      }
+
+      seen.push(key);
       counts[kind] += 1;
     }
   }
 
   return counts;
+}
+
+function getContributionMatchKind(contribution: MatchContribution): MatchKind {
+  if (contribution.algorithm === "WeightedLevenshtein") {
+    return "fuzzy";
+  }
+
+  return contribution.algorithm === "RegEx" ? "regex" : "exact";
+}
+
+function hasSeenKey(items: string[], candidate: string): boolean {
+  for (const item of items) {
+    if (item === candidate) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function countDetections(matches: MergedMatch[]): number {
+  const counts = countMatchKinds(matches);
+
+  return counts.exact + counts.regex + counts.fuzzy;
 }
 
 function compareMatches(left: RawMatch, right: RawMatch): number {

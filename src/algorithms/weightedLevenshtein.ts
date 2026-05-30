@@ -1,4 +1,4 @@
-import type { DetectorInput, RawMatch } from "../shared/types";
+import type { AlgorithmMatchResult, DetectorInput, RawMatch } from "../shared/types";
 
 const SIMILAR_CHARS=[
   "a4@\u03b1",
@@ -15,6 +15,7 @@ const SIMILAR_CHARS=[
 interface TokenCandidate {
   text: string;
   lowerText: string;
+  comparableText: string;
   start: number;
   end: number;
 }
@@ -29,6 +30,22 @@ interface KeywordProfile {
 interface Score {
   distance: number;
   similarity: number;
+  comparisons: number;
+}
+
+interface ScoreResult {
+  score: Score | null;
+  comparisons: number;
+}
+
+interface DistanceResult {
+  distance: number;
+  comparisons: number;
+  withinLimit: boolean;
+}
+
+interface SharedVisualGroupResult {
+  shared: boolean;
   comparisons: number;
 }
 
@@ -56,12 +73,12 @@ function substitutionCost(a: string, b: string): number {
   return 1;
 }
 
-function weightedLevenshtein(source: string, target: string, maxDistance: number): { distance: number; comparisons: number } | null {
+function weightedLevenshtein(source: string, target: string, maxDistance: number): DistanceResult {
   const n=source.length;
   const m=target.length;
 
   if (Math.abs(n-m)>maxDistance) {
-    return null;
+    return { distance: Math.abs(n-m), comparisons: 0, withinLimit: false };
   }
 
   const prev=new Array<number>(m+1);
@@ -91,7 +108,7 @@ function weightedLevenshtein(source: string, target: string, maxDistance: number
     }
 
     if (rowMin>maxDistance) {
-      return null;
+      return { distance: rowMin, comparisons, withinLimit: false };
     }
 
     for (let j=0; j<=m; j++) {
@@ -99,7 +116,7 @@ function weightedLevenshtein(source: string, target: string, maxDistance: number
     }
   }
 
-  return prev[m]<=maxDistance ? { distance: prev[m], comparisons } : null;
+  return { distance: prev[m], comparisons, withinLimit: prev[m]<=maxDistance };
 }
 
 function normalizeThreshold(threshold: number): number {
@@ -108,15 +125,21 @@ function normalizeThreshold(threshold: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function fuzzyMatcher(text: string, profile: KeywordProfile, candidates: TokenCandidate[], scoreCache: Map<string, Score | null>): RawMatch[] {
+function fuzzyMatcher(
+  text: string,
+  profile: KeywordProfile,
+  candidates: TokenCandidate[],
+  scoreCache: Map<string, ScoreResult>,
+  comparisonCounter: { value: number },
+): RawMatch[] {
   const matches: RawMatch[]=[];
   if (profile.target.length===0 || candidates.length===0) {
     return matches;
   }
 
   for (const candidate of candidates) {
-    const score=getCachedScore(profile, candidate, scoreCache);
-    if (score===null) {
+    const score=getCachedScore(profile, candidate, scoreCache, comparisonCounter);
+    if (score===null || hasAcceptedMatch(matches, profile.keyword, candidate.start, candidate.end)) {
       continue;
     }
 
@@ -135,17 +158,33 @@ function fuzzyMatcher(text: string, profile: KeywordProfile, candidates: TokenCa
   return matches;
 }
 
-function getCachedScore(profile: KeywordProfile, candidate: TokenCandidate, scoreCache: Map<string, Score | null>): Score | null {
+function hasAcceptedMatch(matches: RawMatch[], keyword: string, start: number, end: number): boolean {
+  for (const match of matches) {
+    if (match.keyword===keyword && match.start===start && match.end===end) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getCachedScore(
+  profile: KeywordProfile,
+  candidate: TokenCandidate,
+  scoreCache: Map<string, ScoreResult>,
+  comparisonCounter: { value: number },
+): Score | null {
   const cacheKey=`${profile.target}\u0000${candidate.lowerText}`;
   const cached=scoreCache.get(cacheKey);
   if (cached!==undefined) {
-    return cached;
+    return cached.score;
   }
 
-  const score=scoreCandidate(candidate.lowerText, profile.target, profile.threshold);
-  scoreCache.set(cacheKey, score);
+  const result=scoreCandidate(candidate.lowerText, profile.target, profile.threshold);
+  comparisonCounter.value+=result.comparisons;
+  scoreCache.set(cacheKey, result);
 
-  return score;
+  return result.score;
 }
 
 function createKeywordProfiles(keywords: string[], threshold: number): KeywordProfile[] {
@@ -173,7 +212,7 @@ function createKeywordProfiles(keywords: string[], threshold: number): KeywordPr
 
 function createFuzzyCandidates(tokenCount: number, tokens: TokenCandidate[], text: string): TokenCandidate[] {
   if (tokenCount<=1) {
-    return tokens;
+    return createSingleTokenCandidates(tokens);
   }
 
   const candidates: TokenCandidate[]=[];
@@ -184,9 +223,27 @@ function createFuzzyCandidates(tokenCount: number, tokens: TokenCandidate[], tex
     candidates.push({
       text: text.slice(startToken.start, endToken.end),
       lowerText: joinTokenWindow(tokens, i, tokenCount),
+      comparableText: joinTokenWindow(tokens, i, tokenCount),
       start: startToken.start,
       end: endToken.end,
     });
+  }
+
+  return candidates;
+}
+
+function createSingleTokenCandidates(tokens: TokenCandidate[]): TokenCandidate[] {
+  const candidates: TokenCandidate[]=[];
+
+  for (const token of tokens) {
+    candidates.push(token);
+
+    if (token.comparableText!==token.lowerText && token.comparableText.length>=2) {
+      candidates.push({
+        ...token,
+        lowerText: token.comparableText,
+      });
+    }
   }
 
   return candidates;
@@ -200,7 +257,7 @@ function joinTokenWindow(tokens: TokenCandidate[], startIndex: number, tokenCoun
       result+=" ";
     }
 
-    result+=tokens[startIndex+offset].lowerText;
+    result+=tokens[startIndex+offset].comparableText;
   }
 
   return result;
@@ -229,51 +286,59 @@ function normalizeComparableText(value: string): string {
   return result;
 }
 
-function scoreCandidate(source: string, target: string, limit: number): Score | null {
+function scoreCandidate(source: string, target: string, limit: number): ScoreResult {
   const maxLength=Math.max(source.length, target.length);
   if (maxLength===0) {
-    return null;
+    return { score: null, comparisons: 0 };
   }
 
   const maxDistance=(1-limit)*maxLength;
   if (!canReachThresholdByLength(source.length, target.length, maxDistance)) {
-    return null;
+    return { score: null, comparisons: 1 };
   }
 
-  if (!hasSharedVisualGroup(source, target)) {
-    return null;
+  const shared=hasSharedVisualGroup(source, target);
+  if (!shared.shared) {
+    return { score: null, comparisons: shared.comparisons };
   }
 
-  const result=weightedLevenshtein(source, target, maxDistance);
-  if (result===null) {
-    return null;
+  const distance=weightedLevenshtein(source, target, maxDistance);
+  const comparisons=shared.comparisons+distance.comparisons;
+  if (!distance.withinLimit) {
+    return { score: null, comparisons };
   }
 
-  const similarity=1-result.distance/maxLength;
+  const similarity=1-distance.distance/maxLength;
 
   return similarity>=limit
     ? {
-        distance: result.distance,
-        similarity,
-        comparisons: result.comparisons,
+        score: {
+          distance: distance.distance,
+          similarity,
+          comparisons: distance.comparisons,
+        },
+        comparisons,
       }
-    : null;
+    : { score: null, comparisons };
 }
 
 function canReachThresholdByLength(sourceLength: number, targetLength: number, maxDistance: number): boolean {
   return Math.abs(sourceLength-targetLength)<=maxDistance;
 }
 
-function hasSharedVisualGroup(source: string, target: string): boolean {
+function hasSharedVisualGroup(source: string, target: string): SharedVisualGroupResult {
+  let comparisons=0;
+
   for (const sourceChar of source) {
     for (const targetChar of target) {
+      comparisons++;
       if (sourceChar===targetChar || substitutionCost(sourceChar, targetChar)<1) {
-        return true;
+        return { shared: true, comparisons };
       }
     }
   }
 
-  return false;
+  return { shared: false, comparisons };
 }
 
 function countTokens(value: string): number {
@@ -332,12 +397,36 @@ function addTokenCandidate(candidates: TokenCandidate[], tokenText: string, star
     return;
   }
 
+  const lowerText=tokenText.toLowerCase();
+
   candidates.push({
     text: tokenText,
-    lowerText: tokenText.toLowerCase(),
+    lowerText,
+    comparableText: createComparableTokenText(lowerText),
     start,
     end,
   });
+}
+
+function createComparableTokenText(value: string): string {
+  const trimmed=trimEdgeDigits(value);
+
+  return trimmed.length>=2 ? trimmed : value;
+}
+
+function trimEdgeDigits(value: string): string {
+  let start=0;
+  let end=value.length;
+
+  while (start<end && isDigit(value[start])) {
+    start++;
+  }
+
+  while (end>start && isDigit(value[end-1])) {
+    end--;
+  }
+
+  return value.slice(start, end);
 }
 
 function isTokenCharacter(char: string): boolean {
@@ -356,13 +445,21 @@ function isWhitespace(char: string): boolean {
   return char===" " || char==="\n" || char==="\r" || char==="\t" || char==="\f" || char==="\v";
 }
 
-export function runWeightedLevenshtein(input: DetectorInput): RawMatch[] {
+function withComparisons(matches: RawMatch[], comparisons: number): AlgorithmMatchResult {
+  const result=matches as AlgorithmMatchResult;
+  result.comparisons=comparisons;
+
+  return result;
+}
+
+export function runWeightedLevenshtein(input: DetectorInput): AlgorithmMatchResult {
   const { text, keywords, options }=input;
   const results: RawMatch[]=[];
   const tokens=extractTokenCandidates(text);
   const profiles=createKeywordProfiles(keywords, options.fuzzyThreshold);
   const candidateCache=new Map<number, TokenCandidate[]>();
-  const scoreCache=new Map<string, Score | null>();
+  const scoreCache=new Map<string, ScoreResult>();
+  const comparisonCounter={ value: 0 };
 
   for (const profile of profiles) {
     let candidates=candidateCache.get(profile.tokenCount);
@@ -371,8 +468,8 @@ export function runWeightedLevenshtein(input: DetectorInput): RawMatch[] {
       candidateCache.set(profile.tokenCount, candidates);
     }
 
-    results.push(...fuzzyMatcher(text, profile, candidates, scoreCache));
+    results.push(...fuzzyMatcher(text, profile, candidates, scoreCache, comparisonCounter));
   }
 
-  return results;
+  return withComparisons(results, comparisonCounter.value);
 }

@@ -1,4 +1,4 @@
-import type { DetectorInput, RawMatch } from "../shared/types";
+import type { AlgorithmMatchResult, DetectorInput, RawMatch } from "../shared/types";
 
 function buildLps(pattern: string): number[] {
   const m=pattern.length;
@@ -26,11 +26,11 @@ function buildLps(pattern: string): number[] {
   return lps;
 }
 
-function kmp(text: string, pattern: string, keyword: string): RawMatch[] {
+function kmp(text: string, pattern: string, keyword: string): AlgorithmMatchResult {
   const matches: RawMatch[]=[];
   const n=text.length;
   const m=pattern.length;
-  if (m===0 || n<m) return matches;
+  if (m===0 || n<m) return withComparisons(matches, 0);
 
   const data=text.toLowerCase();
   const target=pattern.toLowerCase();
@@ -67,16 +67,26 @@ function kmp(text: string, pattern: string, keyword: string): RawMatch[] {
     }
   }
 
-  return matches;
+  return withComparisons(matches, ni);
 }
 
-export function runKmp(input: DetectorInput): RawMatch[] {
+function withComparisons(matches: RawMatch[], comparisons: number): AlgorithmMatchResult {
+  const result=matches as AlgorithmMatchResult;
+  result.comparisons=comparisons;
+
+  return result;
+}
+
+export function runKmp(input: DetectorInput): AlgorithmMatchResult {
   const { text, keywords }=input;
   const results: RawMatch[]=[];
+  let comparisons=0;
 
   for (const keyword of keywords) {
-    results.push(...kmp(text, keyword, keyword));
+    const matches=kmp(text, keyword, keyword);
+    comparisons+=matches.comparisons;
+    results.push(...matches);
   }
 
-  return results;
+  return withComparisons(results, comparisons);
 }

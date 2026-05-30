@@ -37,6 +37,10 @@ export interface RawMatch {
   isPatternMatch?: boolean;
 }
 
+export interface AlgorithmMatchResult extends Array<RawMatch> {
+  comparisons: number;
+}
+
 export interface MatchContribution {
   algorithm: AlgorithmName;
   keyword: string;
