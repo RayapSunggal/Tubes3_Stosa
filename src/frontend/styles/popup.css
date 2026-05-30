@@ -350,6 +350,29 @@ h3 {
   text-align: right;
 }
 
+.chart-toggle {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 9px;
+  border: 1px solid #bfd2d5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1b6c5d;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chart-toggle:hover {
+  border-color: #8db9b4;
+  background: #f2faf7;
+}
+
+.chart-toggle:focus-visible {
+  outline: 3px solid #9ed8ca;
+  outline-offset: 2px;
+}
+
 .bonus-section {
   padding-top: 2px;
 }

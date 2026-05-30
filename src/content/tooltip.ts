@@ -2,7 +2,7 @@ export interface TooltipPayload {
   keyword: string;
   algorithm: string;
   count: number;
-  executionTimeMs: number;
+  algorithmTimes: Array<{ label: string; timeMs: number }>;
   matchedText: string;
 }
 
@@ -95,7 +95,7 @@ function showTooltip(target: Element, x: number, y: number): void {
     createRow("Matched", payload.matchedText),
     createRow("Algorithm", payload.algorithm),
     createRow("Count", String(payload.count)),
-    createRow("Time", `${payload.executionTimeMs.toFixed(2)} ms`),
+    createTimeSection(payload.algorithmTimes),
   );
 
   tooltip.hidden = false;
@@ -160,6 +160,24 @@ function createRow(label: string, value: string): HTMLElement {
   return row;
 }
 
+function createTimeSection(
+  algorithmTimes: TooltipPayload["algorithmTimes"],
+): HTMLElement {
+  const section = document.createElement("span");
+  section.className = "judol-detector-tooltip__time-section";
+
+  const title = document.createElement("span");
+  title.className = "judol-detector-tooltip__time-title";
+  title.textContent = "Time";
+  section.append(title);
+
+  for (const item of algorithmTimes) {
+    section.append(createRow(item.label, `${item.timeMs.toFixed(2)} ms`));
+  }
+
+  return section;
+}
+
 function injectTooltipStyle(): void {
   if (document.getElementById("judol-detector-tooltip-style")) {
     return;
@@ -200,6 +218,19 @@ function injectTooltipStyle(): void {
       grid-template-columns: 78px minmax(0, 1fr);
       gap: 8px;
       margin-top: 4px;
+    }
+
+    .judol-detector-tooltip__time-section {
+      display: block;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(248, 251, 250, 0.14);
+    }
+
+    .judol-detector-tooltip__time-title {
+      display: block;
+      color: #aebec3;
+      font-weight: 750;
     }
 
     .judol-detector-tooltip__row span {

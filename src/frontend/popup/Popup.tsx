@@ -83,9 +83,6 @@ const algorithmTones: Record<
   AhoCorasick: "violet",
   RabinKarp: "cyan",
 };
-const MAX_VISIBLE_KEYWORDS = 8;
-const DEFAULT_VISIBLE_KEYWORDS = 5;
-
 export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
   const [ocrEnabled, setOcrEnabled] = useState(DEFAULT_OCR_ENABLED);
@@ -601,73 +598,13 @@ function createKeywordRows(
   stats: DetectorStats,
   ocrKeywordCounts: Record<string, number>,
 ): PopupStatsView["keywords"] {
-  const rows: PopupStatsView["keywords"] = [];
   const kindCounts = getKeywordKindCounts(stats);
 
-  for (let i = 0; i < sortedEntries.length && rows.length < DEFAULT_VISIBLE_KEYWORDS; i++) {
-    appendKeywordRow(rows, sortedEntries[i], kindCounts, ocrKeywordCounts);
-  }
-
-  appendRowsForKind(rows, sortedEntries, kindCounts, ocrKeywordCounts, "fuzzy");
-  appendRowsForKind(rows, sortedEntries, kindCounts, ocrKeywordCounts, "regex");
-  appendOcrRows(rows, sortedEntries, kindCounts, ocrKeywordCounts);
-
-  return rows;
-}
-
-function appendRowsForKind(
-  rows: PopupStatsView["keywords"],
-  sortedEntries: Array<[string, number]>,
-  kindCounts: Record<MatchKind, Record<string, number>>,
-  ocrKeywordCounts: Record<string, number>,
-  kind: MatchKind,
-): void {
-  for (const entry of sortedEntries) {
-    if (rows.length >= MAX_VISIBLE_KEYWORDS) {
-      return;
-    }
-
-    const keyword = entry[0];
-    if ((kindCounts[kind][keyword] ?? 0) > 0) {
-      appendKeywordRow(rows, entry, kindCounts, ocrKeywordCounts);
-    }
-  }
-}
-
-function appendOcrRows(
-  rows: PopupStatsView["keywords"],
-  sortedEntries: Array<[string, number]>,
-  kindCounts: Record<MatchKind, Record<string, number>>,
-  ocrKeywordCounts: Record<string, number>,
-): void {
-  for (const entry of sortedEntries) {
-    if (rows.length >= MAX_VISIBLE_KEYWORDS) {
-      return;
-    }
-
-    const keyword = entry[0];
-    if ((ocrKeywordCounts[keyword] ?? 0) > 0 && !hasDomKeywordKind(kindCounts, keyword)) {
-      appendKeywordRow(rows, entry, kindCounts, ocrKeywordCounts);
-    }
-  }
-}
-
-function appendKeywordRow(
-  rows: PopupStatsView["keywords"],
-  entry: [string, number],
-  kindCounts: Record<MatchKind, Record<string, number>>,
-  ocrKeywordCounts: Record<string, number>,
-): void {
-  const [keyword, count] = entry;
-  if (hasKeywordRow(rows, keyword)) {
-    return;
-  }
-
-  rows.push({
+  return sortedEntries.map(([keyword, count]) => ({
     keyword,
     count,
     kind: getKeywordKind(keyword, kindCounts, ocrKeywordCounts),
-  });
+  }));
 }
 
 function getKeywordKind(
@@ -703,16 +640,6 @@ function hasDomKeywordKind(
     (kindCounts.regex[keyword] ?? 0) > 0 ||
     (kindCounts.fuzzy[keyword] ?? 0) > 0
   );
-}
-
-function hasKeywordRow(rows: PopupStatsView["keywords"], keyword: string): boolean {
-  for (const row of rows) {
-    if (row.keyword === keyword) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 function getKeywordKindCounts(

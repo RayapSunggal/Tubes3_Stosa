@@ -5,7 +5,7 @@ import {
   type RecognizeImageResponse,
 } from "../shared/messaging";
 import type { DetectorOptions, DetectorOutput } from "../shared/types";
-import { attachTooltipData } from "./tooltip";
+import { attachTooltipData, type TooltipPayload } from "./tooltip";
 
 const OCR_MATCH_CLASS = "judol-detector-ocr-match";
 const PREVIOUS_TABINDEX_DATA_KEY = "judolPreviousTabIndex";
@@ -361,10 +361,6 @@ function markImageMatch(match: OcrImageMatch): void {
     detectorOutput.matches.flatMap((item) => item.algorithms),
   );
   const keywords = unique(detectorOutput.matches.flatMap((item) => item.keywords));
-  const detectorTimeMs = detectorOutput.stats.algorithmStats.reduce(
-    (total, item) => total + item.executionTimeMs,
-    0,
-  );
 
   image.classList.add(OCR_MATCH_CLASS);
   image.dataset.judolOcrMatch = "true";
@@ -374,9 +370,39 @@ function markImageMatch(match: OcrImageMatch): void {
     keyword: keywords.join(", "),
     algorithm: `OCR, ${algorithms.join(", ")}`,
     count: detectorOutput.matches.length,
-    executionTimeMs: detectorTimeMs+ocrExecutionTimeMs,
+    algorithmTimes: [
+      { label: "OCR", timeMs: ocrExecutionTimeMs },
+      ...getDetectorAlgorithmTimes(detectorOutput, algorithms),
+    ],
     matchedText: createTextPreview(text),
   });
+}
+
+function getDetectorAlgorithmTimes(
+  detectorOutput: DetectorOutput,
+  algorithms: string[],
+): TooltipPayload["algorithmTimes"] {
+  return detectorOutput.stats.algorithmStats
+    .filter((item) => algorithms.some((algorithm) => algorithm === item.algorithm))
+    .map((item) => ({
+      label: formatAlgorithmName(item.algorithm),
+      timeMs: item.executionTimeMs,
+    }));
+}
+
+function formatAlgorithmName(algorithm: string): string {
+  switch (algorithm) {
+    case "BoyerMoore":
+      return "Boyer Moore";
+    case "WeightedLevenshtein":
+      return "Weighted Levenshtein";
+    case "AhoCorasick":
+      return "Aho-Corasick";
+    case "RabinKarp":
+      return "Rabin-Karp";
+    default:
+      return algorithm;
+  }
 }
 
 function preserveTabIndex(image: HTMLImageElement): void {
