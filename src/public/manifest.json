@@ -3,7 +3,7 @@
   "name": "Tubes3 Stosa",
   "version": "1.0.1",
   "description": "Chrome Extension untuk membasmi Judi Online",
-  "permissions": ["storage", "scripting"],
+  "permissions": ["storage", "scripting", "offscreen"],
   "host_permissions": ["<all_urls>"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

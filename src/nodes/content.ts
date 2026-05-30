@@ -70,6 +70,7 @@ let storageChangeListener:
   | ((changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void)
   | null = null;
 let loadListener: (() => void) | null = null;
+let imageLoadListener: ((event: Event) => void) | null = null;
 
 const runtimeWindow = window as Window & {
   __judolDetectorContentCleanup?: () => void;
@@ -111,6 +112,7 @@ async function bootstrapContentScript(): Promise<void> {
     watchStoredSettings();
     setupRuntimeMessaging();
     setupJudolTooltip();
+    setupImageLoadRescan();
     loadListener = () => scheduleScan(500);
     window.addEventListener("load", loadListener, { once: true });
     startObserver();
@@ -144,6 +146,20 @@ function startObserver(): void {
     subtree: true,
     characterData: true,
   });
+}
+
+function setupImageLoadRescan(): void {
+  if (imageLoadListener) {
+    return;
+  }
+
+  imageLoadListener = (event) => {
+    if (event.target instanceof HTMLImageElement) {
+      scheduleScan(200);
+    }
+  };
+
+  document.addEventListener("load", imageLoadListener, true);
 }
 
 function scheduleScan(delayMs: number): void {
@@ -238,6 +254,7 @@ async function scanAndHighlight(): Promise<void> {
           detectorOptions,
           (progressStats) => {
             ocrStats = progressStats;
+            applyBlurToHighlights(blurEnabled);
             publishScanProgress(
               detectorOutput?.stats ?? createEmptyDetectorStats(),
               ocrStats,
@@ -567,6 +584,11 @@ function deactivateContentScript(): void {
   if (loadListener) {
     window.removeEventListener("load", loadListener);
     loadListener = null;
+  }
+
+  if (imageLoadListener) {
+    document.removeEventListener("load", imageLoadListener, true);
+    imageLoadListener = null;
   }
 
   try {
