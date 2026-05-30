@@ -26,6 +26,7 @@ export interface OcrStats {
   matchCount: number;
   keywordCounts: Record<string, number>;
   executionTimeMs: number;
+  comparisons: number;
   errorCount: number;
 }
 

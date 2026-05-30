@@ -14,9 +14,11 @@ import {
   type JudolRuntimeMessage,
   type LatestScanSnapshot,
 } from "../../shared/messaging";
-import type { AlgorithmName } from "../../shared/types";
+import type { AlgorithmName, DetectorStats, MatchKind } from "../../shared/types";
 import { ChartPanel } from "./ChartPanel";
 import { StatsPanel } from "./StatsPanel";
+
+type KeywordKindLabel = "Exact" | "RegEx" | "Fuzzy" | "OCR" | "Detected";
 
 interface PopupStatsView {
   scannedNodes: number;
@@ -28,7 +30,7 @@ interface PopupStatsView {
   keywords: Array<{
     keyword: string;
     count: number;
-    kind: "Exact" | "RegEx" | "Fuzzy" | "OCR" | "Detected";
+    kind: KeywordKindLabel;
   }>;
   algorithms: Array<{
     name: string;
@@ -81,6 +83,8 @@ const algorithmTones: Record<
   AhoCorasick: "violet",
   RabinKarp: "cyan",
 };
+const MAX_VISIBLE_KEYWORDS = 8;
+const DEFAULT_VISIBLE_KEYWORDS = 5;
 
 export function Popup() {
   const [blurEnabled, setBlurEnabled] = useState(DEFAULT_BLUR_ENABLED);
@@ -537,9 +541,13 @@ function createStatsView(
     stats.keywordCounts,
     ocrStats?.keywordCounts ?? {},
   );
-  const keywordEntries = Object.entries(keywordCounts)
+  const keywordEntries = createKeywordRows(
+    Object.entries(keywordCounts)
     .sort((left, right) => right[1] - left[1])
-    .slice(0, 5);
+      .filter((item) => item[1] > 0),
+    stats,
+    ocrStats?.keywordCounts ?? {},
+  );
   const measuredExecutionTime = stats.algorithmStats.reduce(
     (total, item) => total + item.executionTimeMs,
     0,
@@ -567,14 +575,7 @@ function createStatsView(
     ],
     keywords:
       keywordEntries.length > 0
-        ? keywordEntries.map(([keyword, count]) => ({
-            keyword,
-            count,
-            kind:
-              stats.keywordCounts[keyword] === undefined
-                ? ("OCR" as const)
-                : ("Detected" as const),
-          }))
+        ? keywordEntries
         : [{ keyword: "Belum ada", count: 0, kind: "Detected" as const }],
     algorithms: [
       ...stats.algorithmStats.map((item) => ({
@@ -588,10 +589,139 @@ function createStatsView(
         name: "OCR",
         matches: ocrMatchCount,
         timeMs: ocrStats?.executionTimeMs ?? 0,
-        comparisons: 0,
+        comparisons: ocrStats?.comparisons ?? 0,
         tone: "cyan" as const,
       },
     ],
+  };
+}
+
+function createKeywordRows(
+  sortedEntries: Array<[string, number]>,
+  stats: DetectorStats,
+  ocrKeywordCounts: Record<string, number>,
+): PopupStatsView["keywords"] {
+  const rows: PopupStatsView["keywords"] = [];
+  const kindCounts = getKeywordKindCounts(stats);
+
+  for (let i = 0; i < sortedEntries.length && rows.length < DEFAULT_VISIBLE_KEYWORDS; i++) {
+    appendKeywordRow(rows, sortedEntries[i], kindCounts, ocrKeywordCounts);
+  }
+
+  appendRowsForKind(rows, sortedEntries, kindCounts, ocrKeywordCounts, "fuzzy");
+  appendRowsForKind(rows, sortedEntries, kindCounts, ocrKeywordCounts, "regex");
+  appendOcrRows(rows, sortedEntries, kindCounts, ocrKeywordCounts);
+
+  return rows;
+}
+
+function appendRowsForKind(
+  rows: PopupStatsView["keywords"],
+  sortedEntries: Array<[string, number]>,
+  kindCounts: Record<MatchKind, Record<string, number>>,
+  ocrKeywordCounts: Record<string, number>,
+  kind: MatchKind,
+): void {
+  for (const entry of sortedEntries) {
+    if (rows.length >= MAX_VISIBLE_KEYWORDS) {
+      return;
+    }
+
+    const keyword = entry[0];
+    if ((kindCounts[kind][keyword] ?? 0) > 0) {
+      appendKeywordRow(rows, entry, kindCounts, ocrKeywordCounts);
+    }
+  }
+}
+
+function appendOcrRows(
+  rows: PopupStatsView["keywords"],
+  sortedEntries: Array<[string, number]>,
+  kindCounts: Record<MatchKind, Record<string, number>>,
+  ocrKeywordCounts: Record<string, number>,
+): void {
+  for (const entry of sortedEntries) {
+    if (rows.length >= MAX_VISIBLE_KEYWORDS) {
+      return;
+    }
+
+    const keyword = entry[0];
+    if ((ocrKeywordCounts[keyword] ?? 0) > 0 && !hasDomKeywordKind(kindCounts, keyword)) {
+      appendKeywordRow(rows, entry, kindCounts, ocrKeywordCounts);
+    }
+  }
+}
+
+function appendKeywordRow(
+  rows: PopupStatsView["keywords"],
+  entry: [string, number],
+  kindCounts: Record<MatchKind, Record<string, number>>,
+  ocrKeywordCounts: Record<string, number>,
+): void {
+  const [keyword, count] = entry;
+  if (hasKeywordRow(rows, keyword)) {
+    return;
+  }
+
+  rows.push({
+    keyword,
+    count,
+    kind: getKeywordKind(keyword, kindCounts, ocrKeywordCounts),
+  });
+}
+
+function getKeywordKind(
+  keyword: string,
+  kindCounts: Record<MatchKind, Record<string, number>>,
+  ocrKeywordCounts: Record<string, number>,
+): KeywordKindLabel {
+  if ((kindCounts.fuzzy[keyword] ?? 0) > 0) {
+    return "Fuzzy";
+  }
+
+  if ((kindCounts.regex[keyword] ?? 0) > 0) {
+    return "RegEx";
+  }
+
+  if ((ocrKeywordCounts[keyword] ?? 0) > 0 && !hasDomKeywordKind(kindCounts, keyword)) {
+    return "OCR";
+  }
+
+  if ((kindCounts.exact[keyword] ?? 0) > 0) {
+    return "Exact";
+  }
+
+  return "Detected";
+}
+
+function hasDomKeywordKind(
+  kindCounts: Record<MatchKind, Record<string, number>>,
+  keyword: string,
+): boolean {
+  return (
+    (kindCounts.exact[keyword] ?? 0) > 0 ||
+    (kindCounts.regex[keyword] ?? 0) > 0 ||
+    (kindCounts.fuzzy[keyword] ?? 0) > 0
+  );
+}
+
+function hasKeywordRow(rows: PopupStatsView["keywords"], keyword: string): boolean {
+  for (const row of rows) {
+    if (row.keyword === keyword) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getKeywordKindCounts(
+  stats: DetectorStats,
+): Record<MatchKind, Record<string, number>> {
+  return stats.keywordKindCounts ?? {
+    exact: {},
+    regex: {},
+    fuzzy: {},
   };
 }
 

@@ -3,6 +3,7 @@ import type { AlgorithmMatchResult, DetectorInput, RawMatch } from "../shared/ty
 function regexMatcher(text: string): AlgorithmMatchResult {
   const matches: RawMatch[]=[];
   const pattern=/(^|[^\p{L}\p{N}_])([\p{L}]+)(\d{2,})(?![\p{L}\p{N}_])/giu;
+  const comparisons=countScannedCharacters(text);
   let result: RegExpExecArray | null;
 
   while ((result=pattern.exec(text))!==null) {
@@ -20,7 +21,17 @@ function regexMatcher(text: string): AlgorithmMatchResult {
     });
   }
 
-  return withComparisons(matches, 0);
+  return withComparisons(matches, comparisons);
+}
+
+function countScannedCharacters(text: string): number {
+  let comparisons=0;
+
+  for (let i=0; i<text.length; i++) {
+    comparisons++;
+  }
+
+  return comparisons;
 }
 
 function withComparisons(matches: RawMatch[], comparisons: number): AlgorithmMatchResult {

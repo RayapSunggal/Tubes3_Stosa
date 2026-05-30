@@ -57,6 +57,7 @@ export async function scanImagesWithOcr(
     matchCount: 0,
     keywordCounts: {},
     executionTimeMs: 0,
+    comparisons: 0,
     errorCount: 0,
   };
 
@@ -84,6 +85,7 @@ export async function scanImagesWithOcr(
         keywords,
         options,
       });
+      stats.comparisons += countDetectorComparisons(detectorOutput);
 
       if (detectorOutput.matches.length === 0) {
         continue;
@@ -464,8 +466,16 @@ function logOcrScanSummary(stats: OcrStats): void {
     matchedImages: stats.matchedImageCount,
     matches: stats.matchCount,
     errors: stats.errorCount,
+    comparisons: stats.comparisons,
     timeMs: Math.round(stats.executionTimeMs),
   });
+}
+
+function countDetectorComparisons(output: DetectorOutput): number {
+  return output.stats.algorithmStats.reduce(
+    (total, item) => total+item.comparisons,
+    0,
+  );
 }
 
 function getErrorMessage(error: unknown): string {

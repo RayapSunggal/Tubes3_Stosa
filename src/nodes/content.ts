@@ -466,6 +466,11 @@ function createEmptyDetectorStats(): DetectorStats {
     totalRawMatches: 0,
     totalMergedMatches: 0,
     keywordCounts: {},
+    keywordKindCounts: {
+      exact: {},
+      regex: {},
+      fuzzy: {},
+    },
     matchKindCounts: {
       exact: 0,
       regex: 0,
@@ -509,6 +514,7 @@ function createEmptyOcrStats(): OcrStats {
     matchCount: 0,
     keywordCounts: {},
     executionTimeMs: 0,
+    comparisons: 0,
     errorCount: 0,
   };
 }
